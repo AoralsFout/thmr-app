@@ -137,6 +137,39 @@ Flutter 后端地址等构建参数见[后端接口](API.md#配置)，更新参�
 
 Windows 压缩完整的 `Release` 目录；Linux 保留完整 `bundle`；macOS 加入 helpers 后再运行 `bash tool/macos_distribution.sh` 签名并生成 DMG、ZIP 和终端包。macOS 构建包含 Intel 与 Apple Silicon 两种架构。
 
+### Windows 本地完整包（GUI + TUI + CLI）
+
+在仓库根目录的 PowerShell 中依次执行；每一步成功后再继续：
+
+```powershell
+flutter pub get
+python tool/patch_windows_plugins.py
+python tool/build_native.py
+flutter build windows --release
+python tool/package_desktop.py --platform windows --bundle build/windows/x64/runner/Release
+Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath build/thmr-app-windows-x64.zip -Force
+```
+
+`build_native.py` 构建 Rust CLI/TUI 和播放宿主，`flutter build windows` 构建 GUI；`package_desktop.py` 将原生程序放入 GUI 目录，并另外生成仅终端 ZIP。最后的 `Compress-Archive` 才生成包含三种入口的完整 ZIP，与 CI 的完整包内容一致。
+
+| 产物 | 路径 | 内容 |
+| --- | --- | --- |
+| 完整包 | `build/thmr-app-windows-x64.zip` | GUI、CLI/TUI、播放宿主、Flutter 与音频运行库、资源 |
+| 仅终端包 | `thmr-terminal-windows-x64.zip` | CLI/TUI、播放宿主和音频运行库 |
+| 未压缩的完整目录 | `build/windows/x64/runner/Release/` | 可直接运行，也可整体复制 |
+
+解压完整包后，在解压目录的 PowerShell 中运行：
+
+```powershell
+.\thmr_app.exe       # GUI
+.\thmr.exe tui       # TUI
+.\thmr.exe status    # CLI（其他命令见终端文档）
+```
+
+CLI 与 TUI 共用 `thmr.exe`。分发时保留完整目录，包括 `data/`、DLL、`thmr.exe` 和 `thmrd.exe`。打包后的 GUI 会发现同目录的 CLI，无需设置源码运行时使用的 `THMR_CLI_PATH`。上述命令默认使用 `pubspec.yaml` 中的版本与构建号。
+
+### 其他平台与发行参数
+
 Android 使用 `python tool/patch_android_plugin.py` 适配当前 WebView 插件，再执行 `flutter build apk --release`。Windows 构建前运行 `python tool/patch_windows_plugins.py`；CI 同样执行这些已有的插件兼容补丁。
 
 `pubspec.yaml` 是客户端版本与本地构建号的来源，Rust 在构建时读取它。CI 通过 `tool/resolve_version.py` 为各端解析同一版本，构建号为 `run number × 100 + run attempt`。显式覆盖版本时，需同时向 `build_native.py` 传 `--version`/`--build-number`，向 Flutter 传匹配的 `--build-name`/`--build-number` 与 `THMR_CLIENT_VERSION`。
