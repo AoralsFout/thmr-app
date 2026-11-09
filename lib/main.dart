@@ -12,6 +12,7 @@ import 'app.dart';
 import 'core/platform/window_presentation.dart';
 import 'core/platform/desktop_window.dart';
 import 'core/player/audio_engine.dart';
+import 'core/player/desktop_session.dart';
 import 'core/state/settings_provider.dart';
 import 'core/theme/thmr_colors.dart';
 import 'core/update/update_packages.dart';
@@ -32,8 +33,32 @@ Future<void> main(List<String> args) async {
   if (updateLaunch) FlutterError.onError = updateErrorHandler;
   // 桌面 / 移动全平台播放后端(just_audio 桌面实现受限,统一 media_kit)
   try {
-    MediaKit.ensureInitialized();
+    final desktop =
+        !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+    if (desktop && !const bool.fromEnvironment('THMR_LOCAL_PLAYER')) {
+      DesktopSession.current = await DesktopSession.open();
+    } else {
+      MediaKit.ensureInitialized();
+    }
   } catch (error, stack) {
+    if (!kIsWeb &&
+        (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+      debugPrint('Playback startup failed: $error\n$stack');
+      await initializeDesktopWindow();
+      runApp(MaterialApp(
+          home: Scaffold(
+              body: Center(
+                  child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: SelectableText('无法启动播放。\n\n$error'),
+      )))));
+      if (isWindows) {
+        binding.allowFirstFrame();
+        await binding.waitUntilFirstFrameRasterized;
+        await windowManager.show();
+      }
+      return;
+    }
     if (kIsWeb || !Platform.isLinux) rethrow;
     debugPrint('Linux audio initialization failed: $error\n$stack');
     runApp(const MaterialApp(

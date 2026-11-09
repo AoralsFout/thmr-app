@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/radio_api.dart';
 import '../network/radio_sources.dart';
 import 'settings_provider.dart';
+import '../player/desktop_session.dart';
+import '../network/network_probe.dart';
 
 export '../network/radio_sources.dart';
 
@@ -34,6 +36,55 @@ class RadioSourceState {
 typedef SourceTesterFactory = RadioSourceTester Function();
 
 class RadioSourceController extends StateNotifier<RadioSourceState> {
+  RadioSourceController.remote(DesktopSession session)
+      : _testerFactory = RadioSourceTester.new,
+        _remote = session,
+        super(const RadioSourceState()) {
+    _applyRemote(session.snapshot);
+    _remoteSubscription = session.events.listen(_applyRemote);
+  }
+
+  DesktopSession? _remote;
+  StreamSubscription<Map<String, dynamic>>? _remoteSubscription;
+  void _applyRemote(Map<String, dynamic> snapshot) {
+    if (!mounted) return;
+    final preference = switch (snapshot['source']) {
+      'source1' => RadioSourcePreference.source1,
+      'source2' => RadioSourcePreference.source2,
+      _ => RadioSourcePreference.automatic,
+    };
+    final base = snapshot['radioBaseUrl'] as String;
+    final selected = base == radioSources[1].baseUrl
+        ? RadioSourcePreference.source2
+        : RadioSourcePreference.source1;
+    final measurements = <SourceMeasurement>[];
+    for (final result
+        in (snapshot['sourceMeasurements'] as List? ?? const [])) {
+      final sample = (result as Map).cast<String, dynamic>();
+      final source = radioSources[sample['source'] == 'source2' ? 1 : 0];
+      measurements.add(SourceMeasurement(
+          source,
+          NetworkProbeResult(
+            uri: Uri.parse(
+                '${source.baseUrl}/radio/${snapshot['stationId']}/${snapshot['profileId']}'),
+            statusCode: (sample['statusCode'] as num?)?.toInt(),
+            elapsed: Duration(
+                milliseconds: (sample['elapsedMs'] as num?)?.toInt() ?? 0),
+            bytesRead: (sample['bytesRead'] as num?)?.toInt() ?? 0,
+            contentType: sample['contentType'] as String? ?? '',
+            error: sample['error'] as String?,
+          )));
+    }
+    state = RadioSourceState(
+        preference: preference,
+        selected: RadioSource(selected,
+            selected == RadioSourcePreference.source2 ? '源 2' : '源 1', base),
+        tested: true,
+        testing: snapshot['sourceTesting'] == true,
+        measurements: measurements,
+        notice: snapshot['metadataError'] as String?);
+  }
+
   RadioSourceController({
     RadioSourcePreference preference = RadioSourcePreference.automatic,
     SourceTesterFactory? testerFactory,
@@ -50,6 +101,14 @@ class RadioSourceController extends StateNotifier<RadioSourceState> {
   int _generation = 0;
 
   void setPreference(RadioSourcePreference preference) {
+    if (_remote != null) {
+      unawaited(_remote!.execute('set_source', {
+        'source': preference == RadioSourcePreference.automatic
+            ? 'auto'
+            : preference.name
+      }));
+      return;
+    }
     _generation++;
     _tester?.close();
     _tester = null;
@@ -67,11 +126,13 @@ class RadioSourceController extends StateNotifier<RadioSourceState> {
   }
 
   Future<void> ensureSelected() {
+    if (_remote != null) return Future.value();
     if (state.ready) return Future.value();
     return _inFlight ?? testSources();
   }
 
   Future<void> testSources() {
+    if (_remote != null) return _remote!.execute('test_sources').then((_) {});
     if (_inFlight != null) return _inFlight!;
     final future = _measure();
     _inFlight = future;
@@ -125,6 +186,7 @@ class RadioSourceController extends StateNotifier<RadioSourceState> {
 
   @override
   void dispose() {
+    _remoteSubscription?.cancel();
     _generation++;
     _tester?.close();
     super.dispose();
@@ -133,6 +195,8 @@ class RadioSourceController extends StateNotifier<RadioSourceState> {
 
 final radioSourceProvider =
     StateNotifierProvider<RadioSourceController, RadioSourceState>((ref) {
+  final remote = DesktopSession.current;
+  if (remote != null) return RadioSourceController.remote(remote);
   final controller = RadioSourceController(
     preference: ref.read(settingsProvider).radioSource,
   );

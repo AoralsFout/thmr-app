@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'spectrum_ffi.dart' show SpectrumCapture;
 import 'spectrum_android.dart' show AndroidSpectrum;
 import 'spectrum_linux.dart' show LinuxSpectrum;
+import 'desktop_session.dart';
 
 abstract class SpectrumSource {
   void start();
@@ -33,6 +34,8 @@ SpectrumSource? getPlatformSpectrum() {
   if (Platform.isAndroid) {
     return AndroidSpectrum.tryCreate();
   }
-  if (Platform.isLinux) return LinuxSpectrum.instance;
+  if (Platform.isLinux && DesktopSession.current == null) {
+    return LinuxSpectrum.instance;
+  }
   return null;
 }

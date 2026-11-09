@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../player/audio_engine.dart';
+import '../player/desktop_session.dart';
 import '../api/radio_api.dart';
 import '../config.dart';
 import '../models/models.dart';
@@ -67,14 +68,54 @@ class StationUiState {
 /// 双定时器轮询(FLUTTER.md 4.3):
 /// 常规 10s 一次;拿到 expectedEndMs 后在换曲时刻 +800ms 精准再刷。
 class StationPoller extends StateNotifier<StationUiState> {
+  StationPoller.remote(DesktopSession session)
+      : _api = null,
+        _stationId = '',
+        _remote = session,
+        super(const StationUiState()) {
+    _applyRemote(session.snapshot);
+    _remoteSubscription = session.events.listen(_applyRemote);
+    _remoteErrors = session.errors.listen((error) {
+      if (mounted) state = state.copyWith(error: error, initialLoading: false);
+    });
+  }
+
+  DesktopSession? _remote;
+  StreamSubscription<Map<String, dynamic>>? _remoteSubscription;
+  StreamSubscription<Object>? _remoteErrors;
+
+  void _applyRemote(Map<String, dynamic> snapshot) {
+    if (!mounted) return;
+    final raw = snapshot['stationStatus'];
+    if (raw is! Map) {
+      if (snapshot['metadataError'] != null) {
+        state = state.copyWith(
+            error: snapshot['metadataError'], initialLoading: false);
+      }
+      return;
+    }
+    final status = StationStatus.fromJson(raw.cast<String, dynamic>());
+    final current = status.current;
+    final changed = current?.trackId != _lastTrackId ||
+        current?.startedAtMs != _lastStartedAtMs;
+    _lastTrackId = current?.trackId;
+    _lastStartedAtMs = current?.startedAtMs;
+    state = StationUiState(
+        status: status,
+        error: snapshot['metadataError'],
+        initialLoading: false,
+        updatedAt: DateTime.now(),
+        trackGeneration: state.trackGeneration + (changed ? 1 : 0));
+  }
+
   StationPoller(this._api, this._stationId) : super(const StationUiState()) {
     _poll();
     _timer = Timer.periodic(const Duration(seconds: 10), (_) => _poll());
   }
 
-  final RadioApi _api;
+  final RadioApi? _api;
   final String _stationId;
-  late final Timer _timer;
+  Timer? _timer;
   Timer? _endTimer;
   String? _lastTrackId;
   int? _lastStartedAtMs;
@@ -85,7 +126,7 @@ class StationPoller extends StateNotifier<StationUiState> {
   Future<void> _poll() async {
     final requestId = ++_requestId;
     try {
-      final s = await _api.status(_stationId);
+      final s = await _api!.status(_stationId);
       if (!mounted || requestId < _lastAppliedRequestId) return;
       _lastAppliedRequestId = requestId;
       var generation = state.trackGeneration;
@@ -153,18 +194,28 @@ class StationPoller extends StateNotifier<StationUiState> {
   }
 
   /// 用户主动刷新(下拉等)。
-  Future<void> refresh() => _poll();
+  Future<void> refresh() async {
+    if (_remote != null) {
+      await _remote!.execute('refresh');
+      return;
+    }
+    await _poll();
+  }
 
   @override
   void dispose() {
-    _timer.cancel();
+    _timer?.cancel();
+    _remoteSubscription?.cancel();
+    _remoteErrors?.cancel();
     _endTimer?.cancel();
     super.dispose();
   }
 }
 
 final stationProvider = StateNotifierProvider<StationPoller, StationUiState>(
-  (ref) => StationPoller(ref.watch(radioApiProvider), appConfig.stationId),
+  (ref) => DesktopSession.current == null
+      ? StationPoller(ref.watch(radioApiProvider), appConfig.stationId)
+      : StationPoller.remote(DesktopSession.current!),
 );
 
 /// 直播流地址:状态接口可用 + 用户码率偏好 → 完整 URL。

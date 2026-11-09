@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
+import '../player/desktop_session.dart';
 
 import '../theme/thmr_colors.dart';
 import '../network/radio_sources.dart';
@@ -102,7 +104,33 @@ class AppSettings {
 
 class SettingsController extends StateNotifier<AppSettings> {
   SettingsController() : super(const AppSettings()) {
-    ready = _load();
+    ready = _load().then((_) {
+      final remote = DesktopSession.current;
+      if (remote != null) {
+        _applyRemote(remote.snapshot);
+        _remoteSubscription = remote.events.listen(_applyRemote);
+      }
+    });
+  }
+
+  StreamSubscription<Map<String, dynamic>>? _remoteSubscription;
+  void _applyRemote(Map<String, dynamic> snapshot) {
+    if (!mounted) return;
+    final source = switch (snapshot['source']) {
+      'source1' => RadioSourcePreference.source1,
+      'source2' => RadioSourcePreference.source2,
+      _ => RadioSourcePreference.automatic,
+    };
+    state = state.copyWith(radioSource: source, bitrateByStation: {
+      ...state.bitrateByStation,
+      snapshot['stationId'] as String: snapshot['profileId'] as String
+    });
+  }
+
+  @override
+  void dispose() {
+    _remoteSubscription?.cancel();
+    super.dispose();
   }
 
   /// Startup waits for persisted preferences before building the first UI.
@@ -168,6 +196,14 @@ class SettingsController extends StateNotifier<AppSettings> {
   }
 
   Future<void> setRadioSource(RadioSourcePreference source) async {
+    final remote = DesktopSession.current;
+    if (remote != null) {
+      await remote.execute('set_source', {
+        'source':
+            source == RadioSourcePreference.automatic ? 'auto' : source.name
+      });
+      return;
+    }
     _revision++;
     state = state.copyWith(radioSource: source);
     final prefs = await SharedPreferences.getInstance();
@@ -198,6 +234,11 @@ class SettingsController extends StateNotifier<AppSettings> {
 
   /// 记录码率选择(按 station 隔离持久化)。
   Future<void> setBitrate(String stationId, String profileId) async {
+    final remote = DesktopSession.current;
+    if (remote != null) {
+      await remote.execute('set_profile', {'profileId': profileId});
+      return;
+    }
     final next = {...state.bitrateByStation, stationId: profileId};
     _revision++;
     state = state.copyWith(bitrateByStation: next);

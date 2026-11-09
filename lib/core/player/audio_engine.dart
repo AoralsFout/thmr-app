@@ -14,6 +14,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:smtc_windows/smtc_windows.dart';
 import '../platform/desktop_window.dart';
 import 'linux_media_controls.dart';
+import 'desktop_session.dart';
 
 /// The single player instance shared by the UI controller and the
 /// background handler.
@@ -192,6 +193,7 @@ final _linuxMedia = LinuxMediaControls(
 StreamSubscription<double>? _linuxVolumeSubscription;
 
 Future<void> disposeSystemMediaControls() async {
+  if (DesktopSession.current != null) return;
   if (!kIsWeb && Platform.isLinux) {
     await _linuxVolumeSubscription?.cancel();
     _linuxVolumeSubscription = null;
@@ -266,6 +268,7 @@ Future<void> updateSystemMediaMetadata({
   int durationSec = 0,
   String trackId = '',
 }) async {
+  if (DesktopSession.current != null) return;
   if (!kIsWeb && Platform.isLinux) {
     await _linuxMedia.update({
       'track': trackId.isEmpty ? '$title/$artist' : trackId,
@@ -398,6 +401,7 @@ Future<void> updateSystemMediaPlayback({
 /// Call once before runApp. Wires up whichever background layer the
 /// platform needs; keeps the process alive while audio plays.
 Future<void> initBackgroundAudio() async {
+  if (DesktopSession.current != null) return;
   if (kIsWeb) return;
   if (Platform.isAndroid || Platform.isIOS) {
     await AudioService.init(

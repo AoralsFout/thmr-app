@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/player/playback_controller.dart';
+import '../../core/player/desktop_session.dart';
 import '../../core/player/audio_engine.dart';
 import '../../core/platform/desktop_window.dart';
 import '../../core/platform/linux_tray.dart';
@@ -204,7 +205,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
   Future<void> _quit() => quitDesktopApplication(() async {
         _trayMonitor?.dispose();
         _trayMonitor = null;
-        await ref.read(playbackProvider.notifier).stop();
+        if (DesktopSession.current == null) {
+          await ref.read(playbackProvider.notifier).stop();
+        }
         if (Platform.isLinux) await LinuxSpectrum.instance.dispose();
         await disposeSystemMediaControls();
         await sharedRadioStream.dispose();
@@ -254,9 +257,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(trayAvailable
-                  ? '最小化到托盘将保持后台放送,随时从托盘恢复。'
-                  : '当前桌面托盘不可用，将最小化到任务栏并继续放送。'),
+              Text(DesktopSession.current != null
+                  ? '关闭窗口或退出图形界面后，电台仍会在后台播放。停止收听请先点击暂停或停止。'
+                  : trayAvailable
+                      ? '最小化到托盘将保持后台放送,随时从托盘恢复。'
+                      : '当前桌面托盘不可用，将最小化到任务栏并继续放送。'),
               const SizedBox(height: 10),
               SizedBox(
                 height: 40,

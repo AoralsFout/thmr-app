@@ -11,6 +11,7 @@ import '../state/station_provider.dart';
 import '../state/radio_source_provider.dart';
 import 'audio_engine.dart';
 import 'shared_radio_stream.dart';
+import 'desktop_session.dart';
 
 /// 播放状态机 — 与 Web 端 player store 对齐(FLUTTER.md 4.4)。
 enum PlaybackPhase { idle, connecting, online, buffering, reconnecting }
@@ -60,6 +61,20 @@ class PlaybackState {
 /// 断线恢复对齐 Web 端:error → 1s 重连;buffering 持续 >5s → 3s 后重连;
 /// 连续失败 5 次退回 idle。用户手动暂停期间不自动恢复。
 class PlaybackController extends StateNotifier<PlaybackState> {
+  PlaybackController.remote(DesktopSession session)
+      : _streamUrl = null,
+        _remote = session,
+        super(const PlaybackState()) {
+    _applyRemote(session.snapshot);
+    _remoteSubscription = session.events.listen(_applyRemote);
+    _remoteErrors = session.errors.listen((error) {
+      if (mounted) {
+        state = state.copyWith(
+            phase: PlaybackPhase.reconnecting, error: '播放连接已断开，正在重新连接');
+      }
+    });
+  }
+
   PlaybackController({String? Function()? streamUrl})
       : _streamUrl = streamUrl,
         super(const PlaybackState()) {
@@ -87,6 +102,33 @@ class PlaybackController extends StateNotifier<PlaybackState> {
   }
 
   late final Player _player;
+  DesktopSession? _remote;
+  StreamSubscription<Map<String, dynamic>>? _remoteSubscription;
+  StreamSubscription<Object>? _remoteErrors;
+
+  void _applyRemote(Map<String, dynamic> snapshot) {
+    if (!mounted) return;
+    state = PlaybackState(
+      phase: PlaybackPhase.values.firstWhere((p) => p.name == snapshot['phase'],
+          orElse: () => PlaybackPhase.idle),
+      userPaused: snapshot['userPaused'] == true,
+      volume: (snapshot['volume'] as num?)?.toDouble() ?? 70,
+      lastAudibleVolume:
+          (snapshot['lastAudibleVolume'] as num?)?.toDouble() ?? 70,
+      listenedSec: (snapshot['listenedSec'] as num?)?.toInt() ?? 0,
+      error: snapshot['error'] as String?,
+    );
+  }
+
+  Future<void> _remoteCommand(String command,
+      [Map<String, dynamic> fields = const {}]) async {
+    try {
+      await _remote!.execute(command, fields);
+    } catch (error) {
+      if (mounted) state = state.copyWith(error: '$error');
+    }
+  }
+
   final String? Function()? _streamUrl;
   late final StreamSubscription<bool> _playingSubscription;
   late final StreamSubscription<bool> _bufferingSubscription;
@@ -185,6 +227,14 @@ class PlaybackController extends StateNotifier<PlaybackState> {
 
   /// 连接直播流(换码率 = 换地址重连,FLUTTER.md 4.2)。
   Future<void> tune(String url, {bool autoplay = true}) async {
+    if (_remote != null) {
+      final profile = Uri.parse(url).pathSegments.last;
+      if (profile != _remote!.snapshot['profileId']) {
+        await _remoteCommand('set_profile', {'profileId': profile});
+      }
+      await _remoteCommand(autoplay ? 'play' : 'pause');
+      return;
+    }
     _currentUrl = url;
     _reconnectTimer?.cancel();
     _stallTimer?.cancel();
@@ -199,6 +249,7 @@ class PlaybackController extends StateNotifier<PlaybackState> {
 
   /// Switching a source preserves the live path, quality, token and pause state.
   Future<void> changeRadioSource(String baseUrl) async {
+    if (_remote != null) return;
     final current = _currentUrl;
     if (current == null) return;
     final previous = Uri.parse(current);
@@ -216,6 +267,7 @@ class PlaybackController extends StateNotifier<PlaybackState> {
 
   /// 主播放键:未在播 → 连流;连接中/在播 → 暂停。(主面板与迷你窗共用)
   Future<void> toggle(String? streamUrl) async {
+    if (_remote != null) return _remoteCommand('toggle');
     switch (state.phase) {
       case PlaybackPhase.idle:
       case PlaybackPhase.reconnecting:
@@ -228,6 +280,7 @@ class PlaybackController extends StateNotifier<PlaybackState> {
   }
 
   Future<void> pause() async {
+    if (_remote != null) return _remoteCommand('pause');
     state = state.copyWith(userPaused: true, phase: PlaybackPhase.idle);
     _reconnectTimer?.cancel();
     _stallTimer?.cancel();
@@ -242,6 +295,7 @@ class PlaybackController extends StateNotifier<PlaybackState> {
   }
 
   Future<void> resume() async {
+    if (_remote != null) return _remoteCommand('play');
     if (_currentUrl == null) return;
     // 暂停过久的直播流应从头重连,拿到实时位置
     state = state.copyWith(
@@ -251,6 +305,7 @@ class PlaybackController extends StateNotifier<PlaybackState> {
 
   /// Media keys and lock-screen controls rejoin the current live edge.
   Future<void> playFromSystem() async {
+    if (_remote != null) return _remoteCommand('play');
     if (state.phase == PlaybackPhase.online ||
         state.phase == PlaybackPhase.connecting) {
       return;
@@ -264,6 +319,7 @@ class PlaybackController extends StateNotifier<PlaybackState> {
   }
 
   Future<void> stop() async {
+    if (_remote != null) return _remoteCommand('stop');
     _currentUrl = null;
     _reconnectTimer?.cancel();
     _stallTimer?.cancel();
@@ -278,6 +334,9 @@ class PlaybackController extends StateNotifier<PlaybackState> {
   }
 
   Future<void> setVolume(double value) async {
+    if (_remote != null) {
+      return _remoteCommand('set_volume', {'value': value.clamp(0, 100)});
+    }
     final v = value.clamp(0.0, 100.0);
     _volumeRevision++;
     state = state.copyWith(volume: v);
@@ -304,6 +363,12 @@ class PlaybackController extends StateNotifier<PlaybackState> {
 
   @override
   void dispose() {
+    if (_remote != null) {
+      _remoteSubscription?.cancel();
+      _remoteErrors?.cancel();
+      super.dispose();
+      return;
+    }
     _disposed = true;
     _reconnectTimer?.cancel();
     _stallTimer?.cancel();
@@ -319,6 +384,8 @@ class PlaybackController extends StateNotifier<PlaybackState> {
 
 final playbackProvider =
     StateNotifierProvider<PlaybackController, PlaybackState>((ref) {
+  final remote = DesktopSession.current;
+  if (remote != null) return PlaybackController.remote(remote);
   final controller =
       PlaybackController(streamUrl: () => ref.read(streamUrlProvider));
   ref.listen(radioSourceProvider.select((source) => source.selected.baseUrl),
