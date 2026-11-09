@@ -35,6 +35,8 @@ def main():
     bin_dir = (root / args.bin_dir).resolve()
     suffix = '.exe' if os.name == 'nt' else ''
     host, cli = bin_dir / ('thmrd' + suffix), bin_dir / ('thmr' + suffix)
+    if not host.exists() and os.name != 'nt':
+        host = bin_dir.parent / 'THMRHost.app/Contents/MacOS/thmrd'
     audio = (root / 'test/fixtures/sine_440hz_48000_mono.mp3').read_bytes()
     active = 0
     maximum = 0
@@ -114,11 +116,35 @@ def main():
             else:
                 assert result.returncode != 0
             return result
+        def terminal():
+            if os.name == 'nt':
+                return None
+            import fcntl
+            import pty
+            import struct
+            import termios
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
+            process = subprocess.Popen([str(cli), 'tui'], env=dict(env, TERM='xterm-256color'),
+                stdin=slave, stdout=slave, stderr=slave)
+            os.close(slave)
+            time.sleep(0.5)
+            return process, master
         try:
             wait_for(state)
             wait_for(lambda: state().get('stationStatus'))
             command('play')
             wait_for(lambda: state()['phase'] == 'online')
+            interactive = terminal()
+            if interactive:
+                tui, master = interactive
+                try:
+                    os.write(master, b'q')
+                    assert tui.wait(timeout=8) == 0
+                    assert state()['phase'] == 'online', 'q unexpectedly stopped playback'
+                finally:
+                    if tui.poll() is None: tui.kill(); tui.wait()
+                    os.close(master)
             duplicate = subprocess.run([str(host)], env=env, capture_output=True, timeout=10)
             assert duplicate.returncode != 0
             assert state()['phase'] == 'online'
@@ -140,7 +166,15 @@ def main():
             wait_for(lambda: state()['phase'] == 'online')
             command('stop')
             wait_for(lambda: active == 0)
+            interactive = terminal()
             command('daemon', 'prepare-update')
+            if interactive:
+                tui, master = interactive
+                try:
+                    assert tui.wait(timeout=8) == 0, 'TUI did not leave before update'
+                finally:
+                    if tui.poll() is None: tui.kill(); tui.wait()
+                    os.close(master)
             process.wait(timeout=10)
             assert process.returncode == 0
             assert not (temp / 'runtime/instance.json').exists()

@@ -16,3 +16,4 @@ node_modules/
 server-plugin/
 # Rust workspace
 /target/
+/thmr-terminal-*

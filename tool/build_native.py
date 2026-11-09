@@ -41,6 +41,8 @@ def main():
                 str(ROOT / 'target/aarch64-apple-darwin' / profile / name), '-output', str(output / name))
     elif platform.system() == 'Windows':
         target = 'x86_64-pc-windows-msvc'
+        # Terminal users should not need the Visual C++ redistributable for Rust.
+        env['RUSTFLAGS'] = (env.get('RUSTFLAGS', '') + ' -C target-feature=+crt-static').strip()
         run('rustup', 'target', 'add', target)
         run(*cargo, '--target', target, env=env)
     else:

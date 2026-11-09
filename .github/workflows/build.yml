@@ -260,7 +260,10 @@ jobs:
       - name: Bundle native programs and terminal distribution
         run: python tool/package_desktop.py --platform windows --bundle build/windows/x64/runner/Release
       - name: Validate bundled playback host
-        run: python tool/test_unified_host.py --bin-dir build/windows/x64/runner/Release
+        run: |
+          python tool/test_unified_host.py --bin-dir build/windows/x64/runner/Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tool/test_unified_gui.py build/windows/x64/runner/Release
       - name: Pack the complete bundle
         shell: pwsh
         env:
