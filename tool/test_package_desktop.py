@@ -12,6 +12,9 @@ spec.loader.exec_module(package)
 
 
 class TerminalPackaging(unittest.TestCase):
+    @staticmethod
+    def version_output(args, **_):
+        return 'THMR 0.2.0-dev.1+1 · protocol 1\n' if 'thmrd' in args[0] else 'thmr 0.2.0-dev.1\n'
     def test_windows_terminal_contains_real_audio_dependency_and_no_flutter(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -25,7 +28,7 @@ class TerminalPackaging(unittest.TestCase):
                 (native / name).write_bytes(name.encode())
             (bundle / 'libmpv-2.dll').write_bytes(b'pinned mpv')
             (bundle / 'flutter_windows.dll').write_bytes(b'not part of terminal package')
-            with patch.object(package, 'ROOT', root), patch.object(package.subprocess, 'check_output', return_value='thmr 0.2.0-dev.1\n'):
+            with patch.object(package, 'ROOT', root), patch.object(package.subprocess, 'check_output', side_effect=self.version_output):
                 output = package.stage('windows', bundle, native)
                 self.assertEqual((output / 'bin/libmpv-2.dll').read_bytes(), b'pinned mpv')
                 self.assertFalse((output / 'flutter_windows.dll').exists())
@@ -47,7 +50,7 @@ class TerminalPackaging(unittest.TestCase):
             for name in ['thmr', 'thmrd']:
                 (native / name).write_bytes(name.encode())
             (bundle / 'thmr').write_text('# GUI launcher\n')
-            with patch.object(package, 'ROOT', root), patch.object(package.subprocess, 'check_output', return_value='thmr 0.2.0-dev.1\n'):
+            with patch.object(package, 'ROOT', root), patch.object(package.subprocess, 'check_output', side_effect=self.version_output):
                 output = package.stage('linux', bundle, native)
                 self.assertEqual((bundle / 'thmr').read_text(), '# GUI launcher\n')
                 self.assertTrue((bundle / 'bin/thmr').exists())

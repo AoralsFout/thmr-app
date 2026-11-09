@@ -33,8 +33,11 @@ def stage(system, bundle, native, terminal_only=False):
         destination.mkdir(parents=True, exist_ok=True)
         for name in ['thmr', 'thmrd']:
             shutil.copy2(native / (name + suffix), destination / (name + suffix))
-    version = subprocess.check_output([str(destination / ('thmr' + suffix)), '--version'], text=True).strip().split()[-1]
-    metadata = {'version': version, 'protocolVersion': 1}
+    version = subprocess.check_output([str(destination / ('thmr' + suffix)), '--version'], encoding='utf-8').strip().split()[-1]
+    host_version = subprocess.check_output([str(destination / ('thmrd' + suffix)), '--version'], encoding='utf-8').split()[1]
+    host_product, build = host_version.rsplit('+', 1)
+    if host_product != version: raise ValueError('CLI and host versions differ')
+    metadata = {'version': version, 'buildNumber': build, 'protocolVersion': 1}
     info_dir = bundle / 'Contents/Resources' if system == 'macos' else bundle
     info_dir.mkdir(parents=True, exist_ok=True)
     if not terminal_only:

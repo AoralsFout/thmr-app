@@ -42,9 +42,11 @@ class UpdateHelperTests(unittest.TestCase):
                 for directory, good in ((target, False), (payload, succeeds)):
                     (directory / "data/flutter_assets").mkdir(parents=True)
                     source = tx / (directory.name + ".cs")
+                    record = str(tx / ('old.pid' if directory == target else 'new.pid')).replace('"', '""')
                     source.write_text('using System; using System.IO; using System.Reflection; '
                         '[assembly: AssemblyInformationalVersion("0.2.0+2")] '
                         'class Fixture { static void Main(string[] args) { '
+                        + f'File.WriteAllText(@"{record}",System.Diagnostics.Process.GetCurrentProcess().Id.ToString());'
                         + ('if(args.Length==4) File.WriteAllText(args[1],args[3]);' if good else '')
                         + ' } }')
                     subprocess.run([str(csc), "/nologo", "/target:winexe",
@@ -114,6 +116,23 @@ class UpdateHelperTests(unittest.TestCase):
             self.assertEqual((target / "marker").read_text(), "new" if succeeds else "old")
             self.assertFalse(backup.exists())
             self.assertEqual(result.returncode, 0 if succeeds or native_launcher else 1)
+            if os.name == 'nt':
+                # The rollback helper starts the old fixture asynchronously.
+                # Wait for that exact process before removing its mapped EXE.
+                import ctypes
+                kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+                kernel.OpenProcess.restype = ctypes.c_void_p
+                kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+                kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+                for record in [tx / 'old.pid', tx / 'new.pid']:
+                    if not record.exists():
+                        continue
+                    handle = kernel.OpenProcess(0x100000, False, int(record.read_text(encoding='utf-8-sig')))
+                    if handle:
+                        try:
+                            self.assertEqual(kernel.WaitForSingleObject(handle, 5000), 0)
+                        finally:
+                            kernel.CloseHandle(handle)
 
     def test_successful_start_commits_update(self):
         self.run_scenario(True)

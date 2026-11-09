@@ -1,11 +1,13 @@
-# THMR 客户端(Flutter)
+# THMR 客户端
 
 东方音乐电台 **THMR(TouHouMusicRadio)** 跨平台客户端 — Windows / macOS / Linux / Android / iOS。
+
+本仓库共同维护 Flutter 图形界面、Rust CLI/TUI 和桌面播放宿主 `thmrd`。桌面各入口共享播放会话，移动端继续应用内播放。完整桌面包包含终端程序，也提供不依赖 Flutter 的终端包。当前为 `0.2.0-dev.1` 开发预览，安装与构建见 [终端使用说明](docs/TERMINAL.md)，进度见 [实施计划](docs/UNIFIED_CLIENT_PLAN.md)。
 
 对接双后端(均无需改动):
 
 - Radio 流媒体后端:`https://radio.yunmoan.cn`(状态 / 直播流 / 封面 / 反馈)
-- THMR 账号后端:`https://api.yunmoan.cn`(Natayark 登录 / 收藏 / 投票 / 曲库代理)
+- THMR 账号后端公开入口:`https://thmr.yunmoan.cn`(Natayark 登录 / 收藏 / 投票 / 曲库代理)
 
 接口契约详见 [FLUTTER.md](FLUTTER.md)。
 
@@ -13,11 +15,13 @@
 
 ```bash
 flutter pub get
-flutter run -d windows          # Windows 桌面
-flutter run -d macos            # macOS（在 macOS 上运行）
-flutter run -d linux            # Linux（在 Linux 上运行）
+flutter run -d windows --dart-define=THMR_LOCAL_PLAYER=true # 验证原应用内播放器
+flutter run -d macos --dart-define=THMR_LOCAL_PLAYER=true   # 在 macOS 上运行
+flutter run -d linux --dart-define=THMR_LOCAL_PLAYER=true
 flutter run -d <android-device> # Android
 ```
+
+统一桌面模式需要先构建 Rust 程序，并通过 `THMR_CLI_PATH` 指向已构建的 `thmr`，或使用打包后的完整目录启动；详见上述构建说明。正式桌面包默认使用共享宿主。
 
 ## 播放源与网络诊断
 
