@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use block2::RcBlock;
 use objc2::{rc::Retained, runtime::AnyObject, MainThreadMarker};
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-use objc2_foundation::{NSDictionary, NSNumber, NSString, NSTimer};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventModifierFlags, NSEventType,
+};
+use objc2_foundation::{NSDictionary, NSNumber, NSPoint, NSString, NSTimer};
 use objc2_media_player::{
     MPMediaItemPropertyArtist, MPMediaItemPropertyTitle, MPNowPlayingInfoCenter,
     MPNowPlayingInfoPropertyIsLiveStream, MPNowPlayingPlaybackState, MPRemoteCommand,
@@ -103,7 +105,13 @@ impl Media {
         let callback = RcBlock::new(move |_timer: NonNull<NSTimer>| {
             // This timer is scheduled and retained on the main run loop only.
             if done.load(Ordering::Acquire) {
-                media.borrow().app.stop(None);
+                let media = media.borrow();
+                media.app.stop(None);
+                // stop() sets a flag; wake nextEventMatchingMask even without a window.
+                if let Some(event) = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+                    NSEventType::ApplicationDefined, NSPoint::new(0.0, 0.0), NSEventModifierFlags(0), 0.0, 0, None, 0, 0, 0) {
+                    media.app.postEvent_atStart(&event, true);
+                }
                 return;
             }
             if let Ok(mut snapshot) = updates.try_recv() {

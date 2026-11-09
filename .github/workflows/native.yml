@@ -40,6 +40,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libmpv2 dbus-x11
           dbus-run-session -- python3 tool/test_unified_host.py
+      - name: macOS background application lifecycle smoke
+        if: runner.os == 'macOS'
+        run: |
+          brew install mpv
+          python3 tool/test_unified_host.py
       - name: Verify executable version without audio dependencies
         shell: bash
         run: |

@@ -30,8 +30,8 @@ zbus = { version = "=5.15.0", features = ["blocking-api"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 block2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSObject", "NSString", "NSDictionary", "NSValue", "NSDate", "NSTimer"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSEvent", "NSGraphicsContext"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSObject", "NSString", "NSDictionary", "NSValue", "NSDate", "NSTimer", "NSGeometry"] }
 objc2-media-player = { version = "0.3.2", default-features = false, features = ["std", "block2", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent"] }
 
 [dev-dependencies]
