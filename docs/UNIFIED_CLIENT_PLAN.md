@@ -47,7 +47,7 @@
 - [x] PR 验证 Rust/Flutter/协议/打包；非发布分支不发布稳定更新。
 - [x] 同一产品版本/构建号、校验和、依赖说明与签名流程。
 - [x] 更新前停止宿主并通知 TUI 退出；兼容旧 GUI 清单，终端包首期手动升级。
-- [ ] 三平台 CI 构建与可执行冒烟，记录真实媒体键验收的范围。
+- [x] 三平台 CI 构建与可执行冒烟，记录真实媒体键验收的范围。
 
 ## 发布形态
 
@@ -70,16 +70,20 @@ Windows x64、Linux x64、macOS arm64/x64 首期优先。macOS 完整包与终�
 ## 执行记录
 
 - 2026-11-09：确认上游 v0.1.6 基线和本机 Rust 1.96.0、Flutter 3.47.5；建立计划。
-- P1–P3 已实现，版本为 `0.2.0-dev.1`，本机协议为 `1`。实施过程按阶段提交并推送到 fork；没有创建稳定标签、发布正式更新或修改上游主分支。
-- 三平台 Rust 格式、Clippy、单元测试与可执行程序检查通过：[Native host #42547163779](https://github.com/AoralsFout/thmr-app/actions/runs/42547163779)。Linux 私有 D-Bus 会话、macOS 无窗口原生媒体宿主均运行真实 libmpv 本地音频流；Unix 伪终端验证 `q` 保留播放、更新通知退出 TUI。
+- P1–P4 的开发预览已实现，版本为 `0.2.0-dev.1`，本机协议为 `1`。实施过程按阶段提交并推送到 fork；没有创建稳定标签、发布正式更新或修改上游主分支。
+- 三平台 Rust 格式、Clippy、单元测试与可执行程序检查通过：[Native host #42550302635](https://github.com/AoralsFout/thmr-app/actions/runs/42550302635)，运行代码提交 `116a22b`。Linux 私有 D-Bus 会话、macOS 无窗口原生媒体宿主均运行真实 libmpv 本地音频流；Unix 伪终端验证 `q` 保留播放、更新通知退出 TUI。
 - 本地 Windows 完整包和终端包已构建，使用 MSVC 静态 CRT。隔离测试验证 GUI 健康回执、CLI 启动 GUI、重复启动、GUI 退出保留音频；真实 THMR MP3 免登录流在空音频输出下通过有界验证。
 - Windows CI 预览为 `0.2.0-dev.1+1101`；完整包、终端包、版本信息和 SHA-256 文件下载至 `build/unified-preview/ci/windows/`（不提交生成产物）。仓库仍保留手工构建号 `+1`，CI 按工作流规则生成统一构建号。
 - macOS 原生程序放在 `Contents/Helpers`，避免默认大小写不敏感的文件系统把 CLI `thmr` 与 GUI `THMR` 混为一个文件；打包回归测试检查 GUI 保留及 helper 路径。手动预览构建可选择单个平台，且禁止发布 Release。
+- 平台构建与对应自动检查通过：[Windows x64](https://github.com/AoralsFout/thmr-app/actions/runs/42547163840/job/128935228023)、[Linux x64](https://github.com/AoralsFout/thmr-app/actions/runs/42547163840/job/128935227980)、[Android APK](https://github.com/AoralsFout/thmr-app/actions/runs/42547163840/job/128935228075)。
+- [macOS universal 构建](https://github.com/AoralsFout/thmr-app/actions/runs/42550307337)中，两类包的真实 libmpv 播放测试、22 个 Mach-O 文件的架构/签名检查、ZIP 与 DMG 的 GUI 首帧健康回执均通过。Apple Silicon 切片已编入并检查，执行测试使用 Intel runner；公开发行签名与实机验收另列在下方。
+- [macOS 预览附件](https://github.com/AoralsFout/thmr-app/actions/runs/42550307337/artifacts/13647322358)已上传，包含 universal GUI ZIP、DMG 和独立终端包。运行代码为 `116a22b`；最后的收尾提交只更新文档。
 - Flutter 分析、完整测试，以及协议、设置、打包、更新器测试通过。本地完整 Python 测试为 37 项、3 项平台相关跳过；更新器夹具等待回滚进程启动和退出后再清理。GUI 自更新先请求 `prepare_update`，等待宿主退出后再替换文件；终端包保留手动升级方式。
 
 ## 正式发行前的人工验收与后续工作
 
 - [ ] Windows/macOS/Linux 实际音频设备与系统媒体卡片、物理播放暂停键、耳机键验收。
+- [ ] Apple Silicon 实机启动与播放；当前 macOS CI 在 Intel 运行，检查两种架构均已编入产物。
 - [ ] 睡眠唤醒、真实断网恢复、长时间收听和多种 Linux 桌面环境验收。
 - [ ] 在维护者签名环境验证 macOS Developer ID、公证与 Gatekeeper；fork 预览采用本地签名，不代表公开发行签名已通过。
 - [ ] 统一桌面安装包整体人工验收后再决定正式版本和稳定标签。

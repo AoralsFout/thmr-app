@@ -6,6 +6,8 @@ THMR CLI/TUI 与 Flutter 桌面界面共享 `thmrd` 播放宿主。移动端仍�
 
 解压后保留完整目录，将 `bin` 加入 PATH。Windows 终端包内含与 GUI 相同版本的 `libmpv-2.dll`。Linux 首期采用 Ubuntu 24.04/glibc 2.39 构建基线，需要系统 `libmpv2`，MPRIS 需要用户 D-Bus 会话。macOS 需保留 `THMRHost.app`；首次公开发行需要 Developer ID 签名与公证，未配置时预览包使用本地签名。
 
+首次从 0.1.x 桌面版切换时，先退出旧 GUI，再启动完整新包，并重新确认音量、来源和码率。旧 GUI 的播放参数尚未自动迁移到宿主配置。
+
 ```text
 thmr                   交互终端进入 TUI
 thmr play              后台收听
