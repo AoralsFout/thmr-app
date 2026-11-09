@@ -61,6 +61,10 @@ def main():
                 result = subprocess.run([str(cli), 'status', '--json'], env=env, capture_output=True, encoding='utf-8', timeout=10)
                 assert result.returncode == 0, result.stderr
                 before = json.loads(result.stdout)['instanceId']
+                registered = json.loads((config / 'gui.json').read_text())
+                assert registered['protocolVersion'] == 1
+                subprocess.run([str(cli), 'gui'], env=env, check=True, capture_output=True, timeout=10)
+                assert process.poll() is None
                 subprocess.run([str(cli), 'volume', '37'], env=env, check=True, capture_output=True, timeout=10)
                 process.terminate()
                 process.wait(timeout=10)

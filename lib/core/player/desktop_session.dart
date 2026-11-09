@@ -24,6 +24,7 @@ class DesktopSession {
   WebSocket? _socket;
   Timer? _retry;
   bool _disposed = false;
+  String? _cliPath;
   int _epoch = 0;
 
   static Future<DesktopSession> open() async {
@@ -46,8 +47,20 @@ class DesktopSession {
     if (started.exitCode != 0) {
       throw StateError('无法启动播放：${started.stderr}');
     }
-    return attach(
+    final session = await attach(
         File(p.join(directories['runtime'] as String, 'instance.json')));
+    session._cliPath = executable;
+    final launcher = Platform.isLinux
+        ? p.join(p.dirname(Platform.resolvedExecutable), 'thmr')
+        : Platform.resolvedExecutable;
+    try {
+      await File(p.join(directories['config'] as String, 'gui.json'))
+          .writeAsString(jsonEncode(
+              {'protocolVersion': protocolVersion, 'executable': launcher}));
+    } on FileSystemException {
+      // Optional discovery must not prevent listening from a read-only profile.
+    }
+    return session;
   }
 
   /// Also used by integration tests against an isolated host.
@@ -130,8 +143,34 @@ class DesktopSession {
   Future<Map<String, dynamic>> execute(String command,
       [Map<String, dynamic> fields = const {}]) async {
     // No automatic retries: toggle must never be executed twice.
-    final result =
-        await _request(await _endpoint(), {'command': command, ...fields});
+    Map<String, dynamic> result;
+    final previousInstance = snapshot['instanceId'];
+    try {
+      result =
+          await _request(await _endpoint(), {'command': command, ...fields});
+    } catch (error) {
+      final offline = error is FileSystemException ||
+          error is SocketException ||
+          error is HttpException;
+      if (!offline ||
+          _cliPath == null ||
+          (command != 'play' && command != 'toggle')) {
+        rethrow;
+      }
+      final started = await Process.run(_cliPath!, ['daemon', 'start'])
+          .timeout(const Duration(seconds: 18));
+      if (started.exitCode != 0) {
+        throw StateError('无法重新开始播放：${started.stderr}');
+      }
+      await _connect();
+      if (command == 'toggle' && snapshot['instanceId'] == previousInstance) {
+        // A lost response may already have toggled this same host. Do not replay it.
+        result = snapshot;
+      } else {
+        result =
+            await _request(await _endpoint(), {'command': command, ...fields});
+      }
+    }
     _accept(result);
     return result;
   }

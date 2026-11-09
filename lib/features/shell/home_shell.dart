@@ -346,6 +346,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
         ref.watch(radioSourceProvider.select((source) => source.ready));
     final (pbPhase, pbPaused) =
         ref.watch(playbackProvider.select((s) => (s.phase, s.userPaused)));
+    if (!_autoTried && (pbPhase != PlaybackPhase.idle || pbPaused)) {
+      _autoTried = true;
+    }
     if (!_autoTried &&
         settings.autoPlay &&
         stationReady &&

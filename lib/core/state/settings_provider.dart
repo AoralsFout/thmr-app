@@ -121,6 +121,11 @@ class SettingsController extends StateNotifier<AppSettings> {
       'source2' => RadioSourcePreference.source2,
       _ => RadioSourcePreference.automatic,
     };
+    if (state.radioSource == source &&
+        state.bitrateFor(snapshot['stationId'] as String) ==
+            snapshot['profileId']) {
+      return;
+    }
     state = state.copyWith(radioSource: source, bitrateByStation: {
       ...state.bitrateByStation,
       snapshot['stationId'] as String: snapshot['profileId'] as String

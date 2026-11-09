@@ -178,6 +178,20 @@ async fn open_gui() -> Result<()> {
     if let Some(path) = settings.gui_path {
         paths.push(path.into());
     }
+    let registration = std::fs::read_to_string(runtime::config_dir()?.join("gui.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let registered = registration
+        .as_ref()
+        .filter(|j| {
+            j.get("protocolVersion").and_then(|v| v.as_u64()) == Some(PROTOCOL_VERSION as u64)
+        })
+        .and_then(|j| j.get("executable"))
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from);
+    if let Some(path) = &registered {
+        paths.push(path.clone());
+    }
     if cfg!(windows) {
         paths.push(dir.join("thmr_app.exe"));
     } else if cfg!(target_os = "macos") {
@@ -190,6 +204,22 @@ async fn open_gui() -> Result<()> {
     let gui = paths.into_iter().find(|p| p.is_file()).context(
         "compatible Flutter GUI not found; install the full package or set THMR_GUI_PATH",
     )?;
+    if registered.as_ref() != Some(&gui) {
+        let directory = gui.parent().context("invalid GUI path")?;
+        let compatible = [
+            directory.join("native-version.json"),
+            directory.join("../Resources/native-version.json"),
+        ]
+        .iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .filter_map(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .any(|j| {
+            j.get("protocolVersion").and_then(|v| v.as_u64()) == Some(PROTOCOL_VERSION as u64)
+        });
+        if !compatible {
+            bail!("the installed GUI does not support the shared host; install a compatible full package");
+        }
+    }
     spawn_detached(&gui, &["--thmr-daemon"])?;
     println!("已打开 THMR 图形客户端");
     Ok(())
