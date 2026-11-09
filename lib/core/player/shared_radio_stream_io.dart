@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import '../network/request_policy.dart';
 
 /// Relays one upstream radio connection to the player and a local spectrum
 /// decoder. Both consumers connect only to loopback; the radio server receives
@@ -111,12 +112,33 @@ class SharedRadioStream {
   Future<void> _pump(int generation, String sourceUrl) async {
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 8)
+      ..userAgent = 'THMR-Client/1.0 (+https://thmr.yunmoan.cn)'
       ..autoUncompress = false;
     _upstream = client;
+    final uri = Uri.parse(sourceUrl);
+    final policy = RequestPolicy.shared;
+    var rejected = false;
+    var failureRecorded = false;
     try {
-      final request = await client.getUrl(Uri.parse(sourceUrl));
-      request.headers.set('Icy-MetaData', '0');
-      final stream = await request.close();
+      final stream = await policy.run(uri, () async {
+        if (generation != _generation) throw StateError('relay stopped');
+        try {
+          final request = await client.getUrl(uri);
+          request.headers.set('Icy-MetaData', '0');
+          final response =
+              await request.close().timeout(const Duration(seconds: 8));
+          rejected = response.statusCode != HttpStatus.ok;
+          policy.response(uri, response.statusCode,
+              retryAfterHeader: response.headers.value('retry-after'));
+          return response;
+        } catch (_) {
+          if (generation == _generation) {
+            policy.response(uri, null, connectionFailed: true);
+            failureRecorded = true;
+          }
+          rethrow;
+        }
+      });
       if (stream.statusCode != HttpStatus.ok) {
         throw HttpException('Radio returned ${stream.statusCode}');
       }
@@ -137,7 +159,14 @@ class SharedRadioStream {
           }
         }
       }
-    } catch (_) {
+    } catch (error) {
+      if (generation == _generation &&
+          !rejected &&
+          !failureRecorded &&
+          error is! RequestCoolingDown &&
+          error is! StateError) {
+        policy.response(uri, null, connectionFailed: true);
+      }
       // Closing the local responses makes the player's existing reconnect
       // logic start a fresh relay session.
     } finally {

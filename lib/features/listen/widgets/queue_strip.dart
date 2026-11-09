@@ -35,8 +35,13 @@ void showQueueEntryDetail(BuildContext context, QueueEntry entry, int index) {
                 child: entry.coverUrl.isEmpty
                     ? Image.asset('assets/brand/cover-fallback.png',
                         width: 180, fit: BoxFit.cover)
-                    : Image.network(entry.coverUrl,
-                        width: 180, fit: BoxFit.cover),
+                    : Image(
+                        image: TrackCover.providerFor(entry.coverUrl,
+                            cacheWidth:
+                                (180 * MediaQuery.devicePixelRatioOf(context))
+                                    .round()),
+                        width: 180,
+                        fit: BoxFit.cover),
               ),
             ),
             const SizedBox(height: 14),

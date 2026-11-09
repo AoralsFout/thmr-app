@@ -147,8 +147,8 @@ class _LoginScreenState extends State<LoginScreen> {
             return;
           }
         } on ApiException catch (e) {
-          if (e.statusCode == 429 || e.statusCode >= 500) rethrow;
-          // 401/403:该候选 cookie 无效,继续验证其余 cookie
+          if (e.statusCode != 401) rethrow;
+          // Only 401 proves an invalid candidate. Stop on firewall rejection.
         }
       }
       // Not found yet: retry a few times (cookie may still be settling).

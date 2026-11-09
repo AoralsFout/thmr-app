@@ -16,9 +16,12 @@ class DiagnosticsController extends StateNotifier<DiagnosticsSnapshot> {
   final DiagnosticsService Function() serviceFactory;
   DiagnosticsService? _service;
   int _generation = 0;
+  DateTime? _nextRun;
 
   Future<void> run() async {
     if (state.running) return;
+    if (_nextRun != null && DateTime.now().isBefore(_nextRun!)) return;
+    _nextRun = DateTime.now().add(const Duration(seconds: 30));
     final generation = ++_generation;
     final service = serviceFactory();
     _service = service;

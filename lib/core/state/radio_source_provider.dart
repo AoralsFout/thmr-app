@@ -99,6 +99,7 @@ class RadioSourceController extends StateNotifier<RadioSourceState> {
   RadioSourceTester? _tester;
   Future<void>? _inFlight;
   int _generation = 0;
+  DateTime? _nextTest;
 
   void setPreference(RadioSourcePreference preference) {
     if (_remote != null) {
@@ -118,7 +119,12 @@ class RadioSourceController extends StateNotifier<RadioSourceState> {
       selected: preference == RadioSourcePreference.automatic
           ? state.selected
           : radioSources[preference == RadioSourcePreference.source2 ? 1 : 0],
-      tested: state.tested,
+      // A cancelled initial probe still leaves a usable current source. Do
+      // not make autoplay wait forever while the probe cooldown is active.
+      tested: state.tested ||
+          (preference == RadioSourcePreference.automatic &&
+              _nextTest != null &&
+              DateTime.now().isBefore(_nextTest!)),
       measurements: state.measurements,
       testedAt: state.testedAt,
     );
@@ -134,6 +140,10 @@ class RadioSourceController extends StateNotifier<RadioSourceState> {
   Future<void> testSources() {
     if (_remote != null) return _remote!.execute('test_sources').then((_) {});
     if (_inFlight != null) return _inFlight!;
+    if (_nextTest != null && DateTime.now().isBefore(_nextTest!)) {
+      return Future.value();
+    }
+    _nextTest = DateTime.now().add(const Duration(minutes: 1));
     final future = _measure();
     _inFlight = future;
     return future;

@@ -16,25 +16,26 @@ final metaProvider = FutureProvider<ThmrMeta>((ref) async {
   return auth.api.meta();
 });
 
-/// 当前曲收藏状态(9.1)— 跟随 trackGeneration 在换曲后自动重查。
+/// 当前曲收藏状态(9.1)— 曲目或播放轮次变化后自动重查。
 final favoritesStatusProvider =
     FutureProvider.autoDispose<FavoritesStatus>((ref) async {
-  // 依赖换曲计数:换曲 → invalidate
-  ref.watch(stationProvider.select((s) => s.trackGeneration));
+  // Desktop snapshots also arrive on heartbeats and volume changes. Only
+  // changing the current track (including its playback round) needs a request.
+  final current = ref.watch(stationProvider.select(
+      (s) => (s.status?.current?.trackId, s.status?.current?.startedAtMs)));
   final auth = ref.watch(authProvider);
   if (!auth.signedIn) {
     return const FavoritesStatus(
         favorited: false, itemId: null, collectionId: null, collections: []);
   }
-  final st = ref.watch(stationProvider).status;
-  final cur = st?.current;
-  if (cur == null) {
+  final trackId = current.$1;
+  if (trackId == null) {
     return const FavoritesStatus(
         favorited: false, itemId: null, collectionId: null, collections: []);
   }
   return ref.read(authProvider.notifier).api.favoritesStatus(
         stationId: appConfig.stationId,
-        trackId: cur.trackId,
+        trackId: trackId,
       );
 });
 
@@ -50,6 +51,8 @@ class CollectionCatalog {
 /// My collections, with the last successful account-scoped snapshot as a
 /// read-only fallback when a request cannot reach the server.
 final collectionsProvider = FutureProvider<CollectionCatalog>((ref) async {
+  var active = true;
+  ref.onDispose(() => active = false);
   final auth = ref.watch(authProvider);
   final userId = auth.user?.id;
   if (userId == null) return const CollectionCatalog([]);
@@ -63,7 +66,7 @@ final collectionsProvider = FutureProvider<CollectionCatalog>((ref) async {
       } catch (_) {
         // A storage failure must not hide a successful online response.
       }
-      unawaited(_warmCollectionDetails(api, userId, list));
+      unawaited(_warmCollectionDetails(api, userId, list, () => active));
     }
     return CollectionCatalog(list);
   } catch (error) {
@@ -78,12 +81,12 @@ final collectionsProvider = FutureProvider<CollectionCatalog>((ref) async {
   }
 });
 
-Future<void> _warmCollectionDetails(
-    ThmrApi api, String userId, List<Collection> collections) async {
+Future<void> _warmCollectionDetails(ThmrApi api, String userId,
+    List<Collection> collections, bool Function() active) async {
   const cache = CollectionCache();
   final generation = cache.generation(userId);
   for (final folder in collections) {
-    if (cache.generation(userId) != generation) return;
+    if (!active() || cache.generation(userId) != generation) return;
     try {
       final existing = await cache.readDetail(userId, folder.id);
       if (existing != null &&
@@ -92,8 +95,9 @@ Future<void> _warmCollectionDetails(
               const Duration(minutes: 30)) {
         continue;
       }
+      if (!active() || cache.generation(userId) != generation) return;
       final (detail, items) = await api.collectionDetail(folder.id);
-      if (cache.generation(userId) != generation) return;
+      if (!active() || cache.generation(userId) != generation) return;
       await cache.saveDetail(userId, detail, items);
     } catch (_) {
       // Prefetch is best-effort. The visible list is already available.

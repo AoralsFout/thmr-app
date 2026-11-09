@@ -33,33 +33,37 @@ StationStatus _status(int listeners) => StationStatus(
     );
 
 void main() {
-  test('a stale poll cannot replace a newer station status', () async {
+  test('manual refresh joins the pending poll instead of opening another',
+      () async {
     final api = _DelayedRadioApi();
     final poller = StationPoller(api, 'main');
     addTearDown(poller.dispose);
 
     final refresh = poller.refresh();
-    api.requests[1].complete(_status(2));
+    expect(api.requests, hasLength(1));
+    api.requests[0].complete(_status(2));
     await refresh;
     expect(poller.state.status?.listeners, 2);
 
-    api.requests[0].complete(_status(1));
-    await Future<void>.delayed(Duration.zero);
-    expect(poller.state.status?.listeners, 2);
+    await poller.refresh();
+    expect(api.requests, hasLength(1));
   });
 
-  test('a slow poll can show data while a newer poll is pending', () async {
+  test('failed polls back off even when refresh is clicked repeatedly',
+      () async {
     final api = _DelayedRadioApi();
     final poller = StationPoller(api, 'main');
     addTearDown(poller.dispose);
 
-    final refresh = poller.refresh();
-    api.requests[0].complete(_status(1));
+    final refreshes = List.generate(100, (_) => poller.refresh());
+    expect(api.requests, hasLength(1));
+    api.requests[0].completeError(ApiException(429, 'limited'));
+    await Future.wait(refreshes);
     await Future<void>.delayed(Duration.zero);
-    expect(poller.state.status?.listeners, 1);
-
-    api.requests[1].complete(_status(2));
-    await refresh;
-    expect(poller.state.status?.listeners, 2);
+    expect(poller.state.error, isA<ApiException>());
+    for (var i = 0; i < 100; i++) {
+      await poller.refresh();
+    }
+    expect(api.requests, hasLength(1));
   });
 }

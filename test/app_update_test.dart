@@ -9,6 +9,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:thmr_app/core/update/app_update.dart';
+import 'package:thmr_app/core/network/request_policy.dart';
+
+var _clock = DateTime.utc(2026, 11, 9);
 
 class ReleaseAdapter implements HttpClientAdapter {
   int requests = 0;
@@ -16,6 +19,7 @@ class ReleaseAdapter implements HttpClientAdapter {
   Object? data = releaseJson('0.1.10');
   Completer<void>? gate;
   bool signResponse = true;
+  Map<String, List<String>> responseHeaders = {};
   RequestOptions? request;
   final started = Completer<void>();
 
@@ -32,7 +36,8 @@ class ReleaseAdapter implements HttpClientAdapter {
         ? await signTestRelease(data as Map<String, dynamic>)
         : data;
     return ResponseBody.fromString(jsonEncode(body), status, headers: {
-      Headers.contentTypeHeader: ['application/json']
+      Headers.contentTypeHeader: ['application/json'],
+      ...responseHeaders,
     });
   }
 
@@ -78,12 +83,17 @@ Map<String, dynamic> releaseJson(String version) => {
       },
     };
 AppUpdateService serviceFor(ReleaseAdapter adapter) => AppUpdateService(
-    client: Dio()..httpClientAdapter = adapter, publicKey: testUpdatePublicKey);
+    client: Dio()..httpClientAdapter = adapter,
+    publicKey: testUpdatePublicKey,
+    policy: RequestPolicy(interval: Duration.zero, now: () => _clock));
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    _clock = DateTime.utc(2026, 11, 9);
+  });
 
   test('client version uses the build identity and installed build number',
       () async {
@@ -205,15 +215,18 @@ void main() {
     final controller = AppUpdateController(
       service: serviceFor(adapter),
       installedVersion: () async => const ClientVersion('0.1.3', '99'),
+      now: () => _clock,
     );
     addTearDown(controller.dispose);
     await controller.check(manual: true);
     expect(controller.state.status, UpdateStatus.available);
     adapter.data = releaseJson('0.1.3');
+    _clock = _clock.add(const Duration(seconds: 5));
     await controller.check(manual: true);
     expect(controller.state.status, UpdateStatus.current);
     expect(controller.state.release, isNull);
     adapter.data = releaseJson('0.1.1');
+    _clock = _clock.add(const Duration(seconds: 5));
     await controller.check(manual: true);
     expect(controller.state.status, UpdateStatus.current);
   });
@@ -239,6 +252,7 @@ void main() {
     final service = serviceFor(adapter);
     expect(await service.latestRelease(), isNull);
     for (final status in [403, 404, 429, 500]) {
+      _clock = _clock.add(const Duration(minutes: 10));
       adapter.status = status;
       await expectLater(
           service.latestRelease(), throwsA(isA<UpdateCheckException>()));
@@ -248,6 +262,7 @@ void main() {
       <Object>[],
       {'tag_name': 'not-a-version'}
     ]) {
+      _clock = _clock.add(const Duration(minutes: 10));
       adapter.data = data;
       await expectLater(
           service.latestRelease(), throwsA(isA<UpdateCheckException>()));
@@ -299,6 +314,7 @@ void main() {
     AppUpdateController makeController() => AppUpdateController(
           service: serviceFor(adapter),
           installedVersion: () async => const ClientVersion('0.1.3', '1'),
+          now: () => _clock,
         );
     final first = makeController();
     await first.check();
@@ -308,19 +324,23 @@ void main() {
     addTearDown(second.dispose);
     await second.ready;
     expect(second.state.showNotice, isFalse);
+    _clock = _clock.add(const Duration(seconds: 5));
     await second.check(manual: true);
     expect(second.state.status, UpdateStatus.available);
     expect(second.state.showNotice, isFalse);
     adapter.data = releaseJson('0.2.0');
+    _clock = _clock.add(const Duration(seconds: 5));
     await second.check(manual: true);
     expect(second.state.showNotice, isTrue);
   });
 
-  test('failed check is retryable and does not record success', () async {
+  test('failed check can retry after cooldown without recording success',
+      () async {
     final adapter = ReleaseAdapter()..status = 500;
     final controller = AppUpdateController(
       service: serviceFor(adapter),
       installedVersion: () async => const ClientVersion('0.1.3', '1'),
+      now: () => _clock,
     );
     addTearDown(controller.dispose);
     await controller.check();
@@ -328,7 +348,65 @@ void main() {
     expect(controller.state.lastChecked, isNull);
     adapter.status = 200;
     await controller.check(manual: true);
+    expect(adapter.requests, 1);
+    _clock = _clock.add(const Duration(seconds: 31));
+    await controller.check(manual: true);
     expect(controller.state.status, UpdateStatus.available);
+  });
+
+  test('429 Retry-After survives restart and cannot be bypassed manually',
+      () async {
+    final adapter = ReleaseAdapter()
+      ..status = 429
+      ..responseHeaders = {
+        'retry-after': ['3600']
+      };
+    AppUpdateController create() => AppUpdateController(
+          service: serviceFor(adapter),
+          installedVersion: () async => const ClientVersion('0.1.0', '1'),
+          now: () => _clock,
+        );
+    final first = create();
+    await first.check();
+    for (var i = 0; i < 100; i++) {
+      await first.check(manual: true);
+    }
+    expect(adapter.requests, 1);
+    first.dispose();
+    final restarted = create();
+    addTearDown(restarted.dispose);
+    await restarted.check(manual: true);
+    _clock = _clock.add(const Duration(minutes: 59));
+    await restarted.check(manual: true);
+    expect(adapter.requests, 1);
+    _clock = _clock.add(const Duration(minutes: 2));
+    adapter.status = 200;
+    await restarted.check(manual: true);
+    expect(adapter.requests, 2);
+    expect(restarted.state.status, UpdateStatus.available);
+  });
+
+  test('manual successful check bursts are throttled across restarts',
+      () async {
+    final adapter = ReleaseAdapter()..status = 204;
+    AppUpdateController create() => AppUpdateController(
+          service: serviceFor(adapter),
+          installedVersion: () async => const ClientVersion('0.1.0', '1'),
+          now: () => _clock,
+        );
+    final first = create();
+    await first.check(manual: true);
+    for (var i = 0; i < 100; i++) {
+      await first.check(manual: true);
+    }
+    first.dispose();
+    final restarted = create();
+    addTearDown(restarted.dispose);
+    await restarted.check(manual: true);
+    expect(adapter.requests, 1);
+    _clock = _clock.add(const Duration(seconds: 5));
+    await restarted.check(manual: true);
+    expect(adapter.requests, 2);
   });
 
   test('concurrent requests are coalesced and disposal is safe', () async {

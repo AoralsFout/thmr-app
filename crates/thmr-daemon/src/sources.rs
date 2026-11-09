@@ -3,14 +3,19 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use thmr_core::settings::Settings;
 
-pub async fn measure(http: &reqwest::Client, settings: &Settings) -> Vec<Value> {
+pub async fn measure(http: &crate::network::PublicHttp, settings: &Settings) -> Vec<Value> {
     let (first, second) = tokio::join!(
         probe(http, settings, "source1", &settings.source1),
         probe(http, settings, "source2", &settings.source2)
     );
     vec![first, second]
 }
-async fn probe(http: &reqwest::Client, settings: &Settings, id: &str, origin: &str) -> Value {
+async fn probe(
+    http: &crate::network::PublicHttp,
+    settings: &Settings,
+    id: &str,
+    origin: &str,
+) -> Value {
     let start = Instant::now();
     let result = tokio::time::timeout(Duration::from_secs(6), async {
         let url = format!(
@@ -19,7 +24,7 @@ async fn probe(http: &reqwest::Client, settings: &Settings, id: &str, origin: &s
             settings.station_id,
             settings.profile_id
         );
-        let mut response = http.get(url).send().await?.error_for_status()?;
+        let mut response = http.get(&url).await?;
         let content_type = response
             .headers()
             .get("content-type")

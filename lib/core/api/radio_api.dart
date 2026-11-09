@@ -2,12 +2,18 @@ import 'package:dio/dio.dart';
 
 import '../config.dart';
 import '../models/models.dart';
+import '../network/request_policy.dart';
 
 /// Radio 后端；请求与凭据约定见 docs/API.md。
 /// 所有 /api/* 响应带 Cache-Control: no-store,不做 HTTP 层缓存。
 class RadioApi {
-  RadioApi({RadioApi? debugClient, String? baseUrl})
-      : _dio = (debugClient?._dio ?? Dio()) {
+  RadioApi(
+      {RadioApi? debugClient,
+      String? baseUrl,
+      Dio? client,
+      RequestPolicy? policy})
+      : _dio =
+            debugClient?._dio ?? ApiHttpClient(client: client, policy: policy) {
     _dio.options
       ..baseUrl = baseUrl ?? appConfig.radioBaseUrl
       ..connectTimeout = const Duration(seconds: 8)
@@ -15,7 +21,7 @@ class RadioApi {
       ..validateStatus = (s) => s != null && s < 500;
   }
 
-  final Dio _dio;
+  final ApiHttpClient _dio;
   String get baseUrl => _dio.options.baseUrl;
 
   /// streamToken 存在时追加到流地址 / 反馈接口(状态、封面可不带,带上也无害)。

@@ -40,6 +40,37 @@ class _Tester extends RadioSourceTester {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('cancelling initial probes and returning to auto keeps a ready fallback',
+      () async {
+    final pending = Completer<List<SourceMeasurement>>();
+    final controller =
+        RadioSourceController(testerFactory: () => _Tester(pending.future));
+    addTearDown(controller.dispose);
+    final initial = controller.ensureSelected();
+    controller.setPreference(RadioSourcePreference.source1);
+    controller.setPreference(RadioSourcePreference.automatic);
+    expect(controller.state.ready, isTrue);
+    pending.complete([measurement(0, 100), measurement(1, 50)]);
+    await initial;
+    expect(controller.state.selected.id, RadioSourcePreference.source1);
+  });
+  test('completed source tests cannot be repeated in a rapid click burst',
+      () async {
+    var tests = 0;
+    final controller = RadioSourceController(testerFactory: () {
+      tests++;
+      return _Tester(Future.value([measurement(0, 120), measurement(1, 65)]));
+    });
+    addTearDown(controller.dispose);
+    await controller.ensureSelected();
+    for (var i = 0; i < 100; i++) {
+      await controller.testSources();
+    }
+    controller.setPreference(RadioSourcePreference.source1);
+    controller.setPreference(RadioSourcePreference.automatic);
+    await controller.testSources();
+    expect(tests, 1);
+  });
   test('automatic selection compares successful complete audio samples',
       () async {
     final tester =
@@ -85,18 +116,18 @@ void main() {
 
   test('chooseRadioSource respects the improvement threshold per current', () {
     expect(
-        chooseRadioSource([measurement(0, 120), measurement(1, 65)],
-                radioSources[0])
+        chooseRadioSource(
+                [measurement(0, 120), measurement(1, 65)], radioSources[0])
             .id,
         RadioSourcePreference.source2);
     expect(
-        chooseRadioSource([measurement(0, 600), measurement(1, 640)],
-                radioSources[1])
+        chooseRadioSource(
+                [measurement(0, 600), measurement(1, 640)], radioSources[1])
             .id,
         RadioSourcePreference.source2);
     expect(
-        chooseRadioSource([measurement(0, 640), measurement(1, 600)],
-                radioSources[1])
+        chooseRadioSource(
+                [measurement(0, 640), measurement(1, 600)], radioSources[1])
             .id,
         RadioSourcePreference.source2);
   });

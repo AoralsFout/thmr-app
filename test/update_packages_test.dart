@@ -6,6 +6,7 @@ import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:thmr_app/core/network/request_policy.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:thmr_app/core/update/app_update.dart';
@@ -88,6 +89,7 @@ void main() {
   UpdatePackageManager manager(_BytesAdapter adapter,
           {String platform = 'windows-x86_64'}) =>
       UpdatePackageManager(
+          policy: RequestPolicy(interval: Duration.zero),
           client: Dio()..httpClientAdapter = adapter,
           cacheDirectory: () async => directory,
           platform: () => platform);

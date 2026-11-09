@@ -5,6 +5,36 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:thmr_app/core/player/shared_radio_stream_io.dart';
 
 void main() {
+  test('stream reconnect attempts respect upstream 429 without reopening it',
+      () async {
+    final upstream = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final relay = SharedRadioStream();
+    final player = HttpClient();
+    var requests = 0;
+    String? agent;
+    upstream.listen((request) async {
+      requests++;
+      agent = request.headers.value(HttpHeaders.userAgentHeader);
+      request.response.statusCode = 429;
+      request.response.headers.set('retry-after', '120');
+      await request.response.close();
+    });
+    try {
+      for (var i = 0; i < 5; i++) {
+        final uri =
+            await relay.activate('http://127.0.0.1:${upstream.port}/live.mp3');
+        final response = await (await player.getUrl(uri)).close();
+        await response.drain<void>().timeout(const Duration(seconds: 2));
+      }
+      expect(requests, 1);
+      expect(agent, startsWith('THMR-Client/'));
+    } finally {
+      await relay.dispose();
+      player.close(force: true);
+      await upstream.close(force: true);
+    }
+  });
+
   test('player and spectrum share one upstream radio request', () async {
     final upstream = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final relay = SharedRadioStream();

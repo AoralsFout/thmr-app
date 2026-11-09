@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/thmr_theme.dart';
+import '../../core/network/cover_image.dart';
 
 /// 曲目封面:圆角、细描边;无封面(空串 / 404)时使用官方占位图
 /// (提取自 Web 端 public/assets/cover-fallback.svg 的内嵌 PNG)。
@@ -24,7 +25,7 @@ class TrackCover extends StatelessWidget {
       null,
       url.isEmpty
           ? const AssetImage('assets/brand/cover-fallback.png')
-          : NetworkImage(url),
+          : CoverImage(url),
     );
   }
 

@@ -1,6 +1,6 @@
 # 后端接口
 
-本文整理当前 Flutter 客户端使用的接口与解析约定。调用实现位于 `lib/core/api/`，数据模型位于 `lib/core/models/models.dart`；桌面播放宿主的 Radio 请求位于 `crates/thmr-daemon/src/sources.rs`。本机 GUI/CLI 控制接口另见[控制协议](../protocol/README.md)。
+本文整理当前 Flutter 客户端使用的接口与解析约定。调用实现位于 `lib/core/api/`，数据模型位于 `lib/core/models/models.dart`；桌面播放宿主的 Radio 请求由 `crates/thmr-daemon/src/network.rs`、`session.rs` 和 `sources.rs` 管理。本机 GUI/CLI 控制接口另见[控制协议](../protocol/README.md)。
 
 ## 配置
 
@@ -20,6 +20,11 @@
 - ID 使用字符串；`*Ms` 为毫秒 epoch，`createdAt`/`updatedAt`/`addedAt`/`expiresAt` 为 ISO 字符串或空值。
 - Radio 的 `coverUrl` 可能为相对路径，使用当前 Radio 来源补全；账号接口通常返回绝对地址。空封面使用本地图片。
 - 状态/业务请求不使用 HTTP 缓存；封面可缓存。收藏离线快照由客户端状态层单独管理。
+- Flutter 的账号、Radio、更新、封面和诊断请求按 origin 共享请求保护：串行发送、启动间隔至少 500ms、等待队列最多 16 项，相同身份与响应类型的并发 GET 合并。写请求不合并、不自动重试。长连接音频数据不进入业务请求队列。
+- HTTP 403/429 至少冷却 60 秒，并遵守 `Retry-After` 的秒数或 HTTP 日期；5xx、超时及连接重置从 10 秒起退避，最长 5 分钟。冷却时排队请求在本地失败，不发送到服务端。桌面宿主的元数据与测速也共享同类保护。
+- 音量拖动在本地即时反馈，以 50ms 窗口合并宿主命令；
+- 更新检查记录最近尝试和失败冷却，重启与手动操作不能绕过：手动检查至少间隔 5 秒，失败至少暂停 30 秒，服务端要求的更长冷却优先。自动检查仍为成功后 24 小时、尝试后 30 分钟。
+- 队列只预热接下来 6 首的封面，其余按显示需要获取；收藏夹详情逐个预取，列表失效或账号变化时停止旧任务。测速最多每分钟一次，诊断最多每 30 秒一轮；手动刷新加入已有轮询，失败时退避。
 - 直播没有 seek、上一曲或下一曲。切换来源/码率需要重连，必须保留用户暂停意图。
 
 ## Radio

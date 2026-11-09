@@ -1,5 +1,6 @@
 mod mpv;
 mod native;
+mod network;
 mod server;
 mod session;
 mod sources;

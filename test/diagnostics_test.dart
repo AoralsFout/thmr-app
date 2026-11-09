@@ -43,6 +43,21 @@ class _Service extends DiagnosticsService {
 }
 
 void main() {
+  test('completed diagnosis is not repeated on rapid clicks', () async {
+    var runs = 0;
+    final controller = DiagnosticsController(
+        version: () async => 'test',
+        serviceFactory: () {
+          runs++;
+          return _Service();
+        });
+    addTearDown(controller.dispose);
+    await controller.run();
+    for (var i = 0; i < 100; i++) {
+      await controller.run();
+    }
+    expect(runs, 1);
+  });
   test('parses the IPIP JSON schema without inventing location fields', () {
     final location = IpLocation.fromJson({
       'ret': 'ok',

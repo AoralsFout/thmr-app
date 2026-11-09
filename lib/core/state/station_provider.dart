@@ -122,13 +122,27 @@ class StationPoller extends StateNotifier<StationUiState> {
   (String, int, String, String, String)? _lastMediaSignature;
   int _requestId = 0;
   int _lastAppliedRequestId = 0;
+  Future<void>? _pendingPoll;
+  DateTime? _nextAllowed;
+  int _failures = 0;
 
-  Future<void> _poll() async {
+  Future<void> _poll() {
+    if (!mounted) return Future.value();
+    if (_pendingPoll != null) return _pendingPoll!;
+    if (_nextAllowed != null && DateTime.now().isBefore(_nextAllowed!)) {
+      return Future.value();
+    }
+    return _pendingPoll = _runPoll().whenComplete(() => _pendingPoll = null);
+  }
+
+  Future<void> _runPoll() async {
     final requestId = ++_requestId;
     try {
       final s = await _api!.status(_stationId);
       if (!mounted || requestId < _lastAppliedRequestId) return;
       _lastAppliedRequestId = requestId;
+      _failures = 0;
+      _nextAllowed = DateTime.now().add(const Duration(seconds: 1));
       var generation = state.trackGeneration;
       final cur = s.current;
       if (cur != null &&
@@ -179,6 +193,11 @@ class StationPoller extends StateNotifier<StationUiState> {
       _scheduleEndRefresh(cur?.expectedEndMs);
     } catch (e) {
       if (!mounted || requestId < _lastAppliedRequestId) return;
+      _endTimer?.cancel();
+      if (_failures < 6) _failures++;
+      final seconds = 10 * (1 << (_failures - 1));
+      _nextAllowed =
+          DateTime.now().add(Duration(seconds: seconds > 300 ? 300 : seconds));
       state = state.copyWith(error: e, initialLoading: false);
     }
   }

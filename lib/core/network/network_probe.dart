@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'request_policy.dart';
 
 /// Public, credential-free details suitable for a user-exported report.
 class NetworkProbeResult {
@@ -75,9 +76,13 @@ const diagnosticHeaderNames = {
   'eo-cache-status',
   'x-cdn',
   'server-timing',
+  'retry-after',
 };
 
 class NetworkProbe {
+  NetworkProbe({RequestPolicy? policy})
+      : _policy = policy ?? RequestPolicy.shared;
+  final RequestPolicy _policy;
   final Set<HttpClient> _clients = {};
   bool _closed = false;
 
@@ -101,6 +106,7 @@ class NetworkProbe {
     NetworkProbeResult? received;
     try {
       Future<NetworkProbeResult> request() async {
+        if (_closed) throw StateError('closed');
         if (resolveDns) {
           try {
             addresses = (await InternetAddress.lookup(uri.host))
@@ -159,9 +165,27 @@ class NetworkProbe {
         }
       }
 
-      return await request().timeout(timeout);
+      return await _policy.run(uri, () async {
+        try {
+          final result = await request().timeout(timeout);
+          _policy.response(uri, result.statusCode,
+              retryAfterHeader: result.headers['retry-after']);
+          return result;
+        } catch (error) {
+          if (!_closed) {
+            _policy.response(uri, received?.statusCode,
+                retryAfterHeader: received?.headers['retry-after'],
+                connectionFailed: error is TimeoutException ||
+                    error is SocketException ||
+                    error is HandshakeException ||
+                    error is HttpException);
+          }
+          rethrow;
+        }
+      });
     } catch (error) {
       final message = switch (error) {
+        RequestCoolingDown() => '本地请求保护冷却中，请稍后重试（未发送检测请求）',
         TimeoutException() => '连接或读取超时',
         HandshakeException() => 'TLS 握手失败',
         SocketException() => 'DNS 解析或网络连接失败',

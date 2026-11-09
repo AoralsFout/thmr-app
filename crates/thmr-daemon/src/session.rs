@@ -24,6 +24,7 @@ pub struct Session {
     connecting_since: Option<Instant>,
     online_since: Option<Instant>,
     elapsed: Instant,
+    last_open: Option<Instant>,
 }
 
 impl Session {
@@ -40,9 +41,18 @@ impl Session {
             connecting_since: None,
             online_since: None,
             elapsed: Instant::now(),
+            last_open: None,
         })
     }
     fn open(&mut self) -> Result<()> {
+        if let Some(at) = self
+            .last_open
+            .filter(|at| at.elapsed() < Duration::from_secs(1))
+        {
+            self.retry = Some(at + Duration::from_secs(1));
+            return Ok(());
+        }
+        self.last_open = Some(Instant::now());
         self.retry = None;
         self.state.phase = Phase::Connecting;
         self.connecting_since = Some(Instant::now());
@@ -141,6 +151,9 @@ impl Session {
                 if !["auto", "source1", "source2"].contains(&source.as_str()) {
                     bail!("source must be auto, source1 or source2");
                 }
+                if source == self.settings.source {
+                    return Ok(());
+                }
                 let mut settings = self.settings.clone();
                 settings.source = source;
                 settings.save(&self.path)?;
@@ -156,6 +169,9 @@ impl Session {
                 }
             }
             Command::SetProfile { profile_id } => {
+                if profile_id == self.settings.profile_id {
+                    return Ok(());
+                }
                 if !enabled_profiles(&self.state)
                     .iter()
                     .any(|p| *p == profile_id)
@@ -252,15 +268,12 @@ pub async fn run(
     mut media_commands: mpsc::UnboundedReceiver<Command>,
     stop: watch::Sender<bool>,
 ) {
-    let http = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(8))
-        .user_agent("THMR-Client/1.0 (+https://thmr.yunmoan.cn)")
-        .build()
-        .expect("HTTP TLS setup");
+    let http = crate::network::PublicHttp::new().expect("HTTP TLS setup");
     let (meta_tx, mut meta_rx) = mpsc::channel::<Metadata>(4);
     let mut timer = tokio::time::interval(Duration::from_millis(200));
     let mut next_meta = Instant::now();
+    let mut metadata_not_before = Instant::now();
+    let mut metadata_failures = 0u32;
     let mut meta_generation = 0u64;
     let mut meta_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut publish_at = Instant::now();
@@ -269,6 +282,7 @@ pub async fn run(
     let mut probe_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut probe_generation = 0;
     let mut probe_requested = session.settings.source == "auto";
+    let mut next_probe = Instant::now();
     loop {
         let mut shutdown = false;
         tokio::select! {
@@ -276,20 +290,31 @@ pub async fn run(
                 let Some(envelope) = envelope else { break; };
                 let command = envelope.request.command;
                 shutdown = matches!(command, Command::Shutdown | Command::PrepareUpdate);
-                let refresh = matches!(command, Command::Refresh | Command::SetSource { .. });
-                let source_change = matches!(&command, Command::SetSource { .. });
+                let source_change = matches!(&command, Command::SetSource { source } if source != &session.settings.source);
+                let refresh = matches!(command, Command::Refresh) || source_change;
                 let probe = matches!(&command, Command::TestSources) || matches!(&command, Command::SetSource { source } if source == "auto");
                 let result = session.execute(command);
                 if result.is_ok() && refresh {
-                    meta_generation += 1;
-                    if let Some(task) = meta_task.take() { task.abort(); }
-                    next_meta = Instant::now();
+                    if source_change {
+                        meta_generation += 1;
+                        if let Some(task) = meta_task.take() { task.abort(); }
+                        metadata_not_before = Instant::now();
+                        metadata_failures = 0;
+                    }
+                    // Refresh joins current work; it never aborts/restarts an HTTP request.
+                    if source_change || meta_task.as_ref().is_none_or(|t| t.is_finished()) {
+                        next_meta = Instant::now().max(metadata_not_before);
+                    }
                 }
-                if result.is_ok() && (probe || source_change) {
+                if result.is_ok() && source_change {
+                    probe_requested = false;
                     probe_generation += 1;
                     if let Some(task) = probe_task.take() { task.abort(); }
-                    probe_requested = probe;
                     session.state.source_testing = false;
+                }
+                if result.is_ok() && probe && Instant::now() >= next_probe &&
+                    probe_task.as_ref().is_none_or(|t| t.is_finished()) {
+                    probe_requested = true;
                 }
                 session.state.revision += 1;
                 snapshots.send_replace(session.state.clone());
@@ -314,6 +339,8 @@ pub async fn run(
                                     meta_generation += 1;
                                     if let Some(task) = meta_task.take() { task.abort(); }
                                     next_meta = Instant::now();
+                                    metadata_not_before = Instant::now();
+                                    metadata_failures = 0;
                                 }
                             }
                         }
@@ -326,6 +353,7 @@ pub async fn run(
                     if metadata.generation == meta_generation {
                         match metadata.result {
                             Ok(status) => {
+                                metadata_failures = 0;
                                 let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
                                 if let Some(end) = status.pointer("/current/expectedEndMs").and_then(|v| v.as_u64()) {
                                     if end + 800 > now_ms { next_meta = next_meta.min(Instant::now() + Duration::from_millis((end + 800 - now_ms).min(10000))); }
@@ -333,7 +361,12 @@ pub async fn run(
                                 session.state.metadata_error = None;
                                 session.state.station_status = Some(status);
                             }
-                            Err(_) => { session.state.metadata_error = Some("radio metadata request failed; audio playback is independent".into()); }
+                            Err(_) => {
+                                metadata_failures = (metadata_failures + 1).min(6);
+                                metadata_not_before = Instant::now() + Duration::from_secs((10 * (1 << (metadata_failures - 1))).min(300));
+                                next_meta = metadata_not_before;
+                                session.state.metadata_error = Some("radio metadata request failed; audio playback is independent".into());
+                            }
                         }
                     }
                 }
@@ -350,6 +383,7 @@ pub async fn run(
         }
         if probe_requested && probe_task.as_ref().is_none_or(|t| t.is_finished()) {
             probe_requested = false;
+            next_probe = Instant::now() + Duration::from_secs(60);
             session.state.source_testing = true;
             let http = http.clone();
             let settings = session.settings.clone();
@@ -371,7 +405,7 @@ pub async fn run(
             let generation = meta_generation;
             meta_task = Some(tokio::spawn(async move {
                 let result = async {
-                    let response = http.get(url).send().await?.error_for_status()?;
+                    let response = http.get(&url).await?;
                     let status: serde_json::Value = response.json().await?;
                     if status.get("station").is_none() {
                         bail!("invalid station status");
@@ -382,6 +416,7 @@ pub async fn run(
                 let _ = send.send(Metadata { generation, result }).await;
             }));
             next_meta = Instant::now() + Duration::from_secs(10);
+            metadata_not_before = Instant::now() + Duration::from_secs(1);
         }
         let mut comparable = session.state.clone();
         comparable.revision = 0;

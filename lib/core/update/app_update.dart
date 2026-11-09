@@ -7,6 +7,7 @@ import 'package:pub_semver/pub_semver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../platform/client_version.dart';
+import '../network/request_policy.dart';
 import 'update_manifest.dart';
 import 'update_packages.dart';
 
@@ -16,14 +17,17 @@ export 'update_manifest.dart';
 class AppUpdateService {
   AppUpdateService(
       {Dio? client,
+      RequestPolicy? policy,
       this.apiUrl = updateApiUrl,
       this.publicKey = updatePublicKey})
-      : _client = client ??
-            Dio(BaseOptions(
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 20),
-            ));
-  final Dio _client;
+      : _client = ApiHttpClient(
+            policy: policy,
+            client: client ??
+                Dio(BaseOptions(
+                  connectTimeout: const Duration(seconds: 10),
+                  receiveTimeout: const Duration(seconds: 20),
+                )));
+  final ApiHttpClient _client;
   final String apiUrl;
   final String publicKey;
   void close() => _client.close(force: true);
@@ -34,16 +38,25 @@ class AppUpdateService {
     checkedUpdateUrl(apiUrl);
     try {
       final response = await _client.get<Object?>(apiUrl,
-          options: Options(
-              headers: {'Accept': 'application/json', 'User-Agent': 'THMR-App'}));
+          options: Options(headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'THMR-App'
+          }));
       if (response.statusCode == 204) return null;
       return await verifyUpdateManifest(response.data, publicKey);
     } on DioException catch (error) {
       final status = error.response?.statusCode;
+      final cooling = error.error;
+      final retry = cooling is RequestCoolingDown
+          ? cooling.until.difference(_client.policy.now())
+          : RequestPolicy.retryAfter(
+              error.response?.headers.value('retry-after'),
+              _client.policy.now());
       if (status == 403 || status == 429) {
-        throw const UpdateCheckException('更新服务暂时限流或拒绝访问，请稍后重试');
+        throw UpdateCheckException('更新服务暂时限流或拒绝访问，请稍后重试',
+            retryAfter: retry ?? const Duration(minutes: 1));
       }
-      throw const UpdateCheckException('无法连接更新 API，请检查网络与服务部署后重试');
+      throw UpdateCheckException('无法连接更新 API，请检查网络与服务部署后重试', retryAfter: retry);
     }
   }
 }
@@ -133,6 +146,8 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   static const _checkedKey = 'appUpdate.lastChecked';
   static const _ignoredKey = 'appUpdate.ignoredVersion';
   static const _releaseKey = 'appUpdate.release';
+  static const _attemptKey = 'appUpdate.lastAttempt';
+  static const _retryKey = 'appUpdate.retryNotBefore';
   final AppUpdateService _service;
   final UpdatePackageManager? _packages;
   final Future<ClientVersion> Function() _installedVersion;
@@ -140,6 +155,7 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   late final Future<void> ready;
   SharedPreferences? _prefs;
   DateTime? _lastAttempt;
+  DateTime? _retryNotBefore;
   File? _downloaded;
   int _downloadGeneration = 0;
 
@@ -154,6 +170,8 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     try {
       _prefs = await SharedPreferences.getInstance();
       if (!mounted) return;
+      _lastAttempt = DateTime.tryParse(_prefs!.getString(_attemptKey) ?? '');
+      _retryNotBefore = DateTime.tryParse(_prefs!.getString(_retryKey) ?? '');
       state = state.copyWith(
           autoCheck: _prefs!.getBool(_autoKey) ?? true,
           autoDownload: _prefs!.getBool(_downloadKey) ?? true,
@@ -236,6 +254,12 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     await ready;
     if (!mounted || state.busy) return;
     final now = _now();
+    // Manual checks and restarts must not bypass a rejection or a click burst.
+    if (_retryNotBefore != null && now.isBefore(_retryNotBefore!)) return;
+    if (_lastAttempt != null &&
+        now.difference(_lastAttempt!) < const Duration(seconds: 5)) {
+      return;
+    }
     if (!manual) {
       if (!state.autoCheck) return;
       final last = state.lastChecked;
@@ -253,11 +277,15 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     }
     _lastAttempt = now;
     state = state.copyWith(status: UpdateStatus.checking);
+    await _save(() => _prefs?.setString(_attemptKey, now.toIso8601String()));
     try {
       final installed = await _installedVersion();
       final release = await _service.latestRelease();
       if (!mounted) return;
       final newer = release != null && _newer(release, installed);
+      _retryNotBefore = null;
+      await _save(() => _prefs?.remove(_retryKey));
+      if (!mounted) return;
       if (state.release?.identity != release?.identity) _downloaded = null;
       state = AppUpdateState(
           status: release == null
@@ -280,16 +308,30 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       await _autoDownload();
     } catch (error) {
       if (mounted) {
+        var delay = error is UpdateCheckException ? error.retryAfter : null;
+        if (delay == null || delay < const Duration(seconds: 30)) {
+          delay = const Duration(seconds: 30);
+        }
+        _retryNotBefore = _now().add(delay);
         state = state.copyWith(
             status: UpdateStatus.failed,
             error: error is UpdateCheckException
                 ? error.message
                 : '无法读取客户端版本或检查更新，请稍后重试');
+        await _save(() =>
+            _prefs?.setString(_retryKey, _retryNotBefore!.toIso8601String()));
       }
     }
   }
 
   Future<void> downloadUpdate() async {
+    await ready;
+    if (!mounted) return;
+    if (_retryNotBefore != null && _now().isBefore(_retryNotBefore!)) {
+      state =
+          state.copyWith(status: UpdateStatus.failed, error: '更新请求正在冷却，请稍后重试');
+      return;
+    }
     final release = state.release;
     final packages = _packages;
     if (release == null || state.busy) return;
@@ -309,14 +351,23 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       });
       if (mounted && generation == _downloadGeneration) {
         _downloaded = file;
+        _retryNotBefore = null;
         state = state.copyWith(status: UpdateStatus.ready, progress: 1);
+        await _save(() => _prefs?.remove(_retryKey));
       }
     } catch (error) {
       if (mounted && generation == _downloadGeneration) {
+        var delay = error is UpdateCheckException ? error.retryAfter : null;
+        if (delay == null || delay < const Duration(seconds: 30)) {
+          delay = const Duration(seconds: 30);
+        }
+        _retryNotBefore = _now().add(delay);
         state = state.copyWith(
             status: UpdateStatus.failed,
             error:
                 error is UpdateCheckException ? error.message : '下载更新失败，请重试');
+        await _save(() =>
+            _prefs?.setString(_retryKey, _retryNotBefore!.toIso8601String()));
       }
     }
   }

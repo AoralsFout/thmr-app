@@ -175,7 +175,8 @@ class _QueueListState extends State<_QueueList> {
     final cacheWidth = (40 * MediaQuery.devicePixelRatioOf(context)).round();
     final urls = queue.isEmpty
         ? <String>[]
-        : <String>{'', ...queue.map((entry) => entry.coverUrl)}.toList();
+        : <String>{'', ...queue.take(6).map((entry) => entry.coverUrl)}
+            .toList();
     if (cacheWidth == _cacheWidth && listEquals(urls, _coverUrls)) return;
     _cacheWidth = cacheWidth;
     _coverUrls = urls;
@@ -189,8 +190,8 @@ class _QueueListState extends State<_QueueList> {
 
   Future<void> _preloadCovers(
       List<String> urls, int cacheWidth, int generation) async {
-    // Start at most two thumbnails between frames. Waiting for scheduler idle
-    // would starve this work while the playback spectrum ticker is running.
+    // Only warm the next few tracks; the shared HTTP policy also paces visible
+    // images. Do not turn an entire queue into a background download batch.
     for (var start = 0; start < urls.length; start += 2) {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted || generation != _preloadGeneration) return;

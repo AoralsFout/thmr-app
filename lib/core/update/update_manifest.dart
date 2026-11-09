@@ -12,8 +12,9 @@ const updatePublicKey = String.fromEnvironment('THMR_UPDATE_PUBLIC_KEY',
     defaultValue: 'r6zTlw9W6Sv9/PYPSEm/Zk2YTx0EMI8xbHuwnIeG2r0=');
 
 class UpdateCheckException implements Exception {
-  const UpdateCheckException(this.message);
+  const UpdateCheckException(this.message, {this.retryAfter});
   final String message;
+  final Duration? retryAfter;
   @override
   String toString() => message;
 }

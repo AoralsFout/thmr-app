@@ -5,6 +5,33 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:thmr_app/core/network/network_probe.dart';
 
 void main() {
+  test('probe cooldown is shared across instances and does not retry 429',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    var requests = 0;
+    server.listen((request) async {
+      requests++;
+      request.response.statusCode = 429;
+      request.response.headers.set('retry-after', '120');
+      await request.response.close();
+    });
+    final first = NetworkProbe();
+    final second = NetworkProbe();
+    try {
+      final uri = Uri.parse('http://127.0.0.1:${server.port}/api');
+      expect((await first.get(uri, maxBytes: 0)).statusCode, 429);
+      for (var i = 0; i < 20; i++) {
+        final blocked = await second.get(uri, maxBytes: 0);
+        expect(blocked.error, contains('冷却'));
+        expect(blocked.statusCode, isNull, reason: 'No HTTP request was sent');
+      }
+      expect(requests, 1);
+    } finally {
+      first.close();
+      second.close();
+      await server.close(force: true);
+    }
+  });
   test('records the connected peer and only public diagnostic headers',
       () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -67,12 +94,14 @@ void main() {
 
   test('a hung service times out without failing another request', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final independent = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final probe = NetworkProbe();
     final release = Completer<void>();
     addTearDown(() async {
       release.complete();
       probe.close();
       await server.close(force: true);
+      await independent.close(force: true);
     });
     server.listen((request) async {
       if (request.uri.path == '/hung') await release.future;
@@ -80,10 +109,14 @@ void main() {
         await request.response.close();
       } catch (_) {}
     });
+    independent.listen((request) async {
+      await request.response.close();
+    });
     final results = await Future.wait([
       probe.get(Uri.parse('http://127.0.0.1:${server.port}/hung'),
           timeout: const Duration(milliseconds: 100)),
-      probe.get(Uri.parse('http://127.0.0.1:${server.port}/ok'), maxBytes: 0),
+      probe.get(Uri.parse('http://127.0.0.1:${independent.port}/ok'),
+          maxBytes: 0),
     ]);
     expect(results[0].error, contains('超时'));
     expect(results[1].successful, isTrue);

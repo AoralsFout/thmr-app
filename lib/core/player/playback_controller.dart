@@ -58,8 +58,8 @@ class PlaybackState {
 }
 
 /// 直播流播放控制(media_kit)。
-/// 断线恢复对齐 Web 端:error → 1s 重连;buffering 持续 >5s → 3s 后重连;
-/// 连续失败 5 次退回 idle。用户手动暂停期间不自动恢复。
+/// 断线重连采用指数退避；稳定播放 10s 才重置失败次数。
+/// 连续失败 5 次停止，用户手动暂停期间不自动恢复。
 class PlaybackController extends StateNotifier<PlaybackState> {
   PlaybackController.remote(DesktopSession session)
       : _streamUrl = null,
@@ -112,7 +112,9 @@ class PlaybackController extends StateNotifier<PlaybackState> {
       phase: PlaybackPhase.values.firstWhere((p) => p.name == snapshot['phase'],
           orElse: () => PlaybackPhase.idle),
       userPaused: snapshot['userPaused'] == true,
-      volume: (snapshot['volume'] as num?)?.toDouble() ?? 70,
+      volume: _pendingRemoteVolume ??
+          (snapshot['volume'] as num?)?.toDouble() ??
+          70,
       lastAudibleVolume:
           (snapshot['lastAudibleVolume'] as num?)?.toDouble() ?? 70,
       listenedSec: (snapshot['listenedSec'] as num?)?.toInt() ?? 0,
@@ -136,9 +138,12 @@ class PlaybackController extends StateNotifier<PlaybackState> {
   Timer? _stallTimer;
   Timer? _reconnectTimer;
   Timer? _listenTimer;
+  Timer? _stablePlaybackTimer;
   String? _currentUrl;
   int _consecutiveFailures = 0;
   int _volumeRevision = 0;
+  double? _pendingRemoteVolume;
+  Future<void>? _volumeFuture;
   bool _disposed = false;
   bool get _useLocalRelay =>
       !kIsWeb &&
@@ -158,6 +163,15 @@ class PlaybackController extends StateNotifier<PlaybackState> {
     await _player.open(Media(playbackUrl), play: play);
   }
 
+  void _trackStablePlayback() {
+    _stablePlaybackTimer ??= Timer(const Duration(seconds: 10), () {
+      _stablePlaybackTimer = null;
+      if (!_disposed && state.phase == PlaybackPhase.online) {
+        _consecutiveFailures = 0;
+      }
+    });
+  }
+
   void _onPlaying(bool playing) {
     if (_disposed) return;
     // Windows SMTC:同步系统媒体面板状态
@@ -165,9 +179,11 @@ class PlaybackController extends StateNotifier<PlaybackState> {
         playing: playing, stopped: !playing && _currentUrl == null));
     if (playing) {
       _stallTimer?.cancel();
-      _consecutiveFailures = 0;
+      _trackStablePlayback();
       state = state.copyWith(phase: PlaybackPhase.online, clearError: true);
     } else if (state.phase == PlaybackPhase.online && !state.userPaused) {
+      _stablePlaybackTimer?.cancel();
+      _stablePlaybackTimer = null;
       // 流被中断(未手动暂停)→ 视为断线
       state = state.copyWith(phase: PlaybackPhase.buffering);
       _scheduleReconnect(const Duration(seconds: 3));
@@ -180,11 +196,14 @@ class PlaybackController extends StateNotifier<PlaybackState> {
       _stallTimer?.cancel();
       if (state.phase == PlaybackPhase.buffering && _player.state.playing) {
         state = state.copyWith(phase: PlaybackPhase.online);
+        _trackStablePlayback();
       }
       return;
     }
     if (state.phase == PlaybackPhase.online ||
         state.phase == PlaybackPhase.connecting) {
+      _stablePlaybackTimer?.cancel();
+      _stablePlaybackTimer = null;
       state = state.copyWith(phase: PlaybackPhase.buffering);
       // waiting 持续 >5s → 重连
       _stallTimer?.cancel();
@@ -200,7 +219,9 @@ class PlaybackController extends StateNotifier<PlaybackState> {
 
   void _onError(String message) {
     if (_disposed) return;
-    if (state.userPaused || _currentUrl == null) return;
+    if (state.userPaused || _currentUrl == null || _consecutiveFailures >= 5) {
+      return;
+    }
     state = state.copyWith(
         phase: PlaybackPhase.reconnecting,
         error: message.isEmpty ? null : message);
@@ -208,7 +229,9 @@ class PlaybackController extends StateNotifier<PlaybackState> {
   }
 
   void _scheduleReconnect(Duration delay) {
-    _reconnectTimer?.cancel();
+    if (_reconnectTimer?.isActive == true) return;
+    _stablePlaybackTimer?.cancel();
+    _stablePlaybackTimer = null;
     if (_currentUrl == null || state.userPaused) return;
     _consecutiveFailures++;
     if (_consecutiveFailures >= 5) {
@@ -216,12 +239,19 @@ class PlaybackController extends StateNotifier<PlaybackState> {
         phase: PlaybackPhase.idle,
         error: '连续重连失败,请稍后手动重试',
       );
+      if (_useLocalRelay) sharedRadioStream.stop();
+      unawaited(_player.stop().catchError((Object _) {}));
       return;
     }
-    _reconnectTimer = Timer(delay, () async {
+    _reconnectTimer =
+        Timer(delay * (1 << (_consecutiveFailures - 1)), () async {
       if (_disposed || _currentUrl == null || state.userPaused) return;
       state = state.copyWith(phase: PlaybackPhase.reconnecting);
-      await _openRadio(_currentUrl!, play: true);
+      try {
+        await _openRadio(_currentUrl!, play: true);
+      } catch (error) {
+        if (!_disposed) _onError('$error');
+      }
     });
   }
 
@@ -238,6 +268,8 @@ class PlaybackController extends StateNotifier<PlaybackState> {
     _currentUrl = url;
     _reconnectTimer?.cancel();
     _stallTimer?.cancel();
+    _stablePlaybackTimer?.cancel();
+    _stablePlaybackTimer = null;
     _consecutiveFailures = 0;
     state = state.copyWith(
       phase: PlaybackPhase.connecting,
@@ -284,6 +316,8 @@ class PlaybackController extends StateNotifier<PlaybackState> {
     state = state.copyWith(userPaused: true, phase: PlaybackPhase.idle);
     _reconnectTimer?.cancel();
     _stallTimer?.cancel();
+    _stablePlaybackTimer?.cancel();
+    _stablePlaybackTimer = null;
     if (_useLocalRelay) {
       // Resume already opens the live edge again. Stop the local relay so a
       // paused player does not keep downloading radio audio.
@@ -297,6 +331,11 @@ class PlaybackController extends StateNotifier<PlaybackState> {
   Future<void> resume() async {
     if (_remote != null) return _remoteCommand('play');
     if (_currentUrl == null) return;
+    _reconnectTimer?.cancel();
+    _stallTimer?.cancel();
+    _stablePlaybackTimer?.cancel();
+    _stablePlaybackTimer = null;
+    _consecutiveFailures = 0;
     // 暂停过久的直播流应从头重连,拿到实时位置
     state = state.copyWith(
         userPaused: false, phase: PlaybackPhase.connecting, clearError: true);
@@ -323,6 +362,8 @@ class PlaybackController extends StateNotifier<PlaybackState> {
     _currentUrl = null;
     _reconnectTimer?.cancel();
     _stallTimer?.cancel();
+    _stablePlaybackTimer?.cancel();
+    _stablePlaybackTimer = null;
     // stop 不重置音量(保持与持久化值、播放器实际音量一致)
     state = PlaybackState(
       volume: state.volume,
@@ -334,8 +375,11 @@ class PlaybackController extends StateNotifier<PlaybackState> {
   }
 
   Future<void> setVolume(double value) async {
+    if (_disposed || !value.isFinite) return;
     if (_remote != null) {
-      return _remoteCommand('set_volume', {'value': value.clamp(0, 100)});
+      _pendingRemoteVolume = value.clamp(0.0, 100.0);
+      state = state.copyWith(volume: _pendingRemoteVolume);
+      return _volumeFuture ??= _flushRemoteVolume();
     }
     final v = value.clamp(0.0, 100.0);
     _volumeRevision++;
@@ -345,6 +389,21 @@ class PlaybackController extends StateNotifier<PlaybackState> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('volume', v);
     await prefs.setDouble('last_audible_volume', lastAudibleVolume);
+  }
+
+  Future<void> _flushRemoteVolume() async {
+    try {
+      while (!_disposed && _pendingRemoteVolume != null) {
+        // Preserve live feedback while bounding IPC, disk writes and snapshots.
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        if (_disposed) return;
+        final value = _pendingRemoteVolume!;
+        _pendingRemoteVolume = null;
+        await _remoteCommand('set_volume', {'value': value});
+      }
+    } finally {
+      _volumeFuture = null;
+    }
   }
 
   /// 启动时恢复上次音量;用户先于加载完成调过音量则放弃恢复。
@@ -363,6 +422,9 @@ class PlaybackController extends StateNotifier<PlaybackState> {
 
   @override
   void dispose() {
+    _disposed = true;
+    _pendingRemoteVolume = null;
+    _stablePlaybackTimer?.cancel();
     if (_remote != null) {
       _remoteSubscription?.cancel();
       _remoteErrors?.cancel();

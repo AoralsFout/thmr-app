@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import '../../../shared/widgets/track_cover.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -173,11 +174,11 @@ class _Cover96 extends StatelessWidget {
     final child = (track == null || track.coverUrl.isEmpty)
         ? Image.asset('assets/brand/cover-fallback.png',
             fit: BoxFit.cover, cacheWidth: cacheWidth)
-        : Image.network(
-            track.coverUrl,
+        : Image(
+            image:
+                TrackCover.providerFor(track.coverUrl, cacheWidth: cacheWidth),
             fit: BoxFit.cover,
             filterQuality: FilterQuality.low,
-            cacheWidth: cacheWidth,
             gaplessPlayback: true,
             errorBuilder: (_, __, ___) => Image.asset(
                 'assets/brand/cover-fallback.png',

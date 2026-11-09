@@ -2,12 +2,14 @@ import 'package:dio/dio.dart';
 
 import '../config.dart';
 import '../models/models.dart';
+import '../network/request_policy.dart';
 import 'radio_api.dart';
 
 /// THMR 账号后端，接口约定见 docs/API.md。
 /// App 采用 Bearer 方案:WebView 提取一次 thmr_session,之后全部走 header。
 class ThmrApi {
-  ThmrApi() : _dio = Dio() {
+  ThmrApi({Dio? client, RequestPolicy? policy})
+      : _dio = ApiHttpClient(client: client, policy: policy) {
     _dio.options
       ..baseUrl = appConfig.thmrBaseUrl
       ..connectTimeout = const Duration(seconds: 8)
@@ -18,7 +20,7 @@ class ThmrApi {
         'THMR-Client/1.0 (+https://thmr.yunmoan.cn)';
   }
 
-  final Dio _dio;
+  final ApiHttpClient _dio;
 
   set token(String? value) {
     if (value == null || value.isEmpty) {

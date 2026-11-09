@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../platform/windows_process_exit.dart';
+import '../network/request_policy.dart';
 import '../platform/windows_update_process.dart';
 import 'update_manifest.dart';
 import '../player/desktop_session.dart';
@@ -30,18 +31,21 @@ String _randomToken() => List.generate(32, (_) => Random.secure().nextInt(256))
 class UpdatePackageManager {
   UpdatePackageManager(
       {Dio? client,
+      RequestPolicy? policy,
       Future<Directory> Function()? cacheDirectory,
       String Function()? platform,
       Future<void> Function()? quit})
-      : _client = client ??
-            Dio(BaseOptions(
-                connectTimeout: const Duration(seconds: 15),
-                receiveTimeout: const Duration(seconds: 30))),
+      : _client = ApiHttpClient(
+            policy: policy,
+            client: client ??
+                Dio(BaseOptions(
+                    connectTimeout: const Duration(seconds: 15),
+                    receiveTimeout: const Duration(seconds: 30)))),
         _cacheDirectory = cacheDirectory ?? updateCacheDirectory,
         _platform = platform ?? currentUpdatePlatform,
         _quit = quit ?? (() async => terminateWindowsProcess());
 
-  final Dio _client;
+  final ApiHttpClient _client;
   final Future<Directory> Function() _cacheDirectory;
   final String Function() _platform;
   final Future<void> Function() _quit;
@@ -141,7 +145,16 @@ class UpdatePackageManager {
       if (error is DioException && CancelToken.isCancel(error)) {
         throw const UpdateCheckException('更新下载已取消');
       }
-      throw const UpdateCheckException('下载更新失败，请检查网络、磁盘空间后重试');
+      final delay = error is DioException
+          ? (error.error is RequestCoolingDown
+              ? (error.error as RequestCoolingDown)
+                  .until
+                  .difference(_client.policy.now())
+              : RequestPolicy.retryAfter(
+                  error.response?.headers.value('retry-after'),
+                  _client.policy.now()))
+          : null;
+      throw UpdateCheckException('下载更新失败，请检查网络、磁盘空间后重试', retryAfter: delay);
     } finally {
       if (identical(_cancelToken, token)) _cancelToken = null;
     }
