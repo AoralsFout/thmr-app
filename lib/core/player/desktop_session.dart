@@ -33,7 +33,6 @@ class DesktopSession {
       p.dirname(Platform.resolvedExecutable),
       if (Platform.isMacOS) '..',
       if (Platform.isMacOS) 'Helpers',
-      if (Platform.isLinux) 'bin',
       Platform.isWindows ? 'thmr.exe' : 'thmr'
     ]);
     final executable = Platform.environment['THMR_CLI_PATH'] ?? sibling;
@@ -54,7 +53,7 @@ class DesktopSession {
         File(p.join(directories['runtime'] as String, 'instance.json')));
     session._cliPath = executable;
     final launcher = Platform.isLinux
-        ? p.join(p.dirname(Platform.resolvedExecutable), 'thmr')
+        ? p.join(p.dirname(Platform.resolvedExecutable), 'thmr-gui')
         : Platform.resolvedExecutable;
     try {
       await File(p.join(directories['config'] as String, 'gui.json'))

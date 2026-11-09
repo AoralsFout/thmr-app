@@ -13,15 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def verify(bundle, max_glibc=None):
-    required = ['thmr_app', 'thmr', 'thmr_runtime_check', 'install-desktop.sh',
-                'uninstall-desktop.sh', 'README-Linux.md', 'lib/libthmr_mp3.so',
+    executables = ['thmr_app', 'thmr', 'thmrd', 'thmr-gui', 'thmr_runtime_check',
+                   'install-desktop.sh', 'uninstall-desktop.sh']
+    required = [*executables, 'native-version.json', 'README-Linux.md', 'lib/libthmr_mp3.so',
                 'data/icudtl.dat', 'data/flutter_assets/version.json',
                 'data/flutter_assets/assets/icons/icon-512.png',
                 'data/licenses/minimp3/LICENSE', 'lib/libflutter_linux_gtk.so']
     for name in required:
         if not (bundle / name).is_file():
             raise ValueError(f'Incomplete Linux bundle: missing {name}')
-    for name in required[:5]:
+    for name in executables:
         if not os.access(bundle / name, os.X_OK):
             raise ValueError(f'Executable permission missing: {name}')
     version = json.loads((bundle / 'data/flutter_assets/version.json').read_text())
@@ -37,13 +38,9 @@ def verify(bundle, max_glibc=None):
     decoder = ctypes.CDLL(str((bundle / 'lib/libthmr_mp3.so').resolve()))
     for symbol in ['thmr_mp3_create', 'thmr_mp3_decode', 'thmr_mp3_destroy']:
         getattr(decoder, symbol)
-    native = []
-    if (bundle / 'native-version.json').exists():
-        native = [bundle / 'bin/thmr', bundle / 'bin/thmrd']
-        for binary in native:
-            if not binary.is_file() or not os.access(binary, os.X_OK):
-                raise ValueError(f'Missing native program: {binary.name}')
-            subprocess.run([str(binary), '--version'], check=True)
+    native = [bundle / 'thmr', bundle / 'thmrd']
+    for binary in native:
+        subprocess.run([str(binary), '--version'], check=True)
     observed = set()
     for binary in [bundle / 'thmr_app', bundle / 'thmr_runtime_check', *native,
                    *sorted((bundle / 'lib').glob('*.so'))]:
@@ -53,7 +50,7 @@ def verify(bundle, max_glibc=None):
     maximum = max(observed, key=lambda value: tuple(map(int, value.split('.'))))
     if max_glibc and tuple(map(int, maximum.split('.'))) > tuple(map(int, max_glibc.split('.'))):
         raise ValueError(f'Bundle needs glibc {maximum}, exceeds baseline {max_glibc}')
-    subprocess.run([str((bundle / 'thmr').resolve()), '--check-runtime'], check=True)
+    subprocess.run([str((bundle / 'thmr-gui').resolve()), '--check-runtime'], check=True)
     print(f'Linux bundle verified: {version["version"]}+{version["build_number"]}, '
           f'maximum glibc requirement {maximum}')
 

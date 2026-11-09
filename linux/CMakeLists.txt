@@ -121,7 +121,7 @@ target_link_libraries(thmr_runtime_check PRIVATE ${CMAKE_DL_LIBS})
 install(TARGETS thmr_runtime_check RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/../tool/linux/launch.sh"
-  DESTINATION "${CMAKE_INSTALL_PREFIX}" RENAME thmr COMPONENT Runtime)
+  DESTINATION "${CMAKE_INSTALL_PREFIX}" RENAME thmr-gui COMPONENT Runtime)
 install(PROGRAMS
   "${CMAKE_CURRENT_SOURCE_DIR}/../tool/linux/install-desktop.sh"
   "${CMAKE_CURRENT_SOURCE_DIR}/../tool/linux/uninstall-desktop.sh"

@@ -144,6 +144,7 @@ jobs:
         run: python tool/package_desktop.py --platform linux --bundle build/linux/x64/release/bundle
       - name: Validate Linux runtime and desktop integration
         run: |
+          python3 tool/test_linux_cli.py build/linux/x64/release/bundle/thmr
           python3 tool/verify_linux_bundle.py build/linux/x64/release/bundle --max-glibc 2.39
           flutter_sdk=$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")
           env PATH=/nonexistent "$flutter_sdk/bin/cache/dart-sdk/bin/dart" \

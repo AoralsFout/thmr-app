@@ -218,7 +218,7 @@ def exercise(bundle):
             (preferences / 'shared_preferences.json').write_text(json.dumps({
                 'flutter.closeAction': 'tray', 'flutter.autoPlay': False}))
             with (root / 'app.log').open('w+') as log:
-                app = subprocess.Popen([str(bundle / 'thmr')], env=env,
+                app = subprocess.Popen([str(bundle / 'thmr-gui')], env=env,
                                        stdout=log, stderr=log)
                 try:
                     wait_for(lambda: player_property('CanControl'), 'MPRIS startup')
@@ -234,7 +234,7 @@ def exercise(bundle):
                     time.sleep(2.5)  # Production monitor polls every two seconds.
                     windows.close(window)
                     wait_for(lambda: not windows.visible(window), 'hide to usable tray')
-                    duplicate = subprocess.run([str(bundle / 'thmr')], env=env,
+                    duplicate = subprocess.run([str(bundle / 'thmr'), 'gui'], env=env,
                                                stdout=log, stderr=log, timeout=10)
                     if duplicate.returncode != 0 or app.poll() is not None:
                         raise AssertionError('Duplicate launch did not preserve original process')
@@ -255,7 +255,7 @@ def exercise(bundle):
                     print(log.read(), file=sys.stderr)
                     raise
                 finally:
-                    native = bundle / 'bin/thmr'
+                    native = bundle / 'thmr'
                     if native.exists():
                         subprocess.run([str(native), 'daemon', 'stop'], env=env,
                                        stdout=log, stderr=log, timeout=10)

@@ -38,7 +38,7 @@ class TerminalPackaging(unittest.TestCase):
                     self.assertIn('bin/thmr.exe', files.namelist())
                     self.assertIn('bin/libmpv-2.dll', files.namelist())
 
-    def test_linux_preserves_gui_launcher_and_places_cli_in_bin(self):
+    def test_linux_root_command_is_cli_and_gui_launcher_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             native = root / 'native'
@@ -49,12 +49,20 @@ class TerminalPackaging(unittest.TestCase):
             bundle.mkdir()
             for name in ['thmr', 'thmrd']:
                 (native / name).write_bytes(name.encode())
-            (bundle / 'thmr').write_text('# GUI launcher\n')
+            (bundle / 'thmr-gui').write_text('# GUI launcher\n')
+            (bundle / 'thmr_app').write_bytes(b'Flutter GUI executable')
             with patch.object(package, 'ROOT', root), patch.object(package.subprocess, 'check_output', side_effect=self.version_output):
                 output = package.stage('linux', bundle, native)
-                self.assertEqual((bundle / 'thmr').read_text(), '# GUI launcher\n')
-                self.assertTrue((bundle / 'bin/thmr').exists())
+                self.assertEqual((bundle / 'thmr').read_bytes(), b'thmr')
+                self.assertEqual((bundle / 'thmrd').read_bytes(), b'thmrd')
+                self.assertEqual((bundle / 'thmr-gui').read_text(), '# GUI launcher\n')
+                self.assertEqual((bundle / 'thmr_app').read_bytes(), b'Flutter GUI executable')
+                self.assertFalse((bundle / 'bin/thmr').exists())
+                self.assertEqual((output / 'bin/thmr').read_bytes(), b'thmr')
                 self.assertTrue((output / 'bin/thmrd').exists())
+                # Terminal-only restaging must use the same root native programs.
+                output = package.stage('linux', bundle, native, terminal_only=True)
+                self.assertEqual((output / 'bin/thmr').read_bytes(), b'thmr')
 
     def test_macos_helpers_preserve_case_insensitive_gui_executable(self):
         with tempfile.TemporaryDirectory() as directory:

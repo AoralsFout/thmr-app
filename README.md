@@ -70,7 +70,7 @@ sudo apt-get install clang cmake ninja-build pkg-config libgtk-3-dev \
   libayatana-appindicator3-dev libmpv-dev mpv
 ```
 
-分发时保留整个 `bundle/`，使用 `./thmr` 启动，可运行 `./install-desktop.sh` 添加当前用户的应用菜单入口。运行系统仍需 libmpv、GTK、libsecret、jsoncpp 和 Ayatana AppIndicator 等运行库；频谱使用内置 minimp3，无需安装 FFmpeg 命令。Linux 已接入托盘、关闭行为设置、MPRIS 系统媒体控制和本应用实时频谱，托盘不可用时回退任务栏最小化。Linux 登录保留网页版入口，本轮不适配客户端登录和迷你播放器；macOS/Linux 使用原生标题栏。完整安装、测试和兼容边界见 [Linux 使用说明](docs/LINUX.md)。
+分发时保留整个 `bundle/`，根目录的 `./thmr` 为统一 CLI，交互终端默认进入 TUI，使用 `./thmr gui` 打开图形界面；可运行 `./install-desktop.sh` 添加当前用户的应用菜单入口。运行系统仍需 libmpv、GTK、libsecret、jsoncpp 和 Ayatana AppIndicator 等运行库；频谱使用内置 minimp3，无需安装 FFmpeg 命令。Linux 已接入托盘、关闭行为设置、MPRIS 系统媒体控制和本应用实时频谱，托盘不可用时回退任务栏最小化。Linux 登录保留网页版入口，本轮不适配客户端登录和迷你播放器；macOS/Linux 使用原生标题栏。完整安装、测试和兼容边界见 [Linux 使用说明](docs/LINUX.md)。
 
 桌面端（Windows / macOS / Linux）每个登录会话只运行一个实例。重复启动会退出新进程并唤起已有窗口；Windows 支持从托盘隐藏或最小化状态恢复，并保留当前的主窗口 / 迷你播放器模式。退出或崩溃后可正常重新启动。
 

@@ -24,13 +24,15 @@ class LinuxDistributionTests(unittest.TestCase):
         self.env = dict(os.environ, XDG_DATA_HOME=str(self.data))
         self.probe = self.base / 'launch-probe'
         self.env['THMR_LAUNCH_PROBE'] = str(self.probe)
-        for source, name in [('launch.sh', 'thmr'),
+        for source, name in [('launch.sh', 'thmr-gui'),
                              ('install-desktop.sh', 'install-desktop.sh'),
                              ('uninstall-desktop.sh', 'uninstall-desktop.sh')]:
             shutil.copy2(ROOT / 'tool/linux' / source, self.app / name)
         self.fake_executable('thmr_app',
             'printf "%s\\n" "$0" "$@" > "$THMR_LAUNCH_PROBE"\n')
         self.fake_executable('thmr_runtime_check', 'exit 0\n')
+        self.fake_executable('thmr',
+            'printf "%s\\n" "$0" "$@" > "$THMR_LAUNCH_PROBE"\n')
         icons = self.app / 'data/flutter_assets/assets/icons'
         icons.mkdir(parents=True)
         shutil.copy2(ROOT / 'assets/icons/icon-512.png', icons)
@@ -51,9 +53,6 @@ class LinuxDistributionTests(unittest.TestCase):
             from gi.repository import Gio
         except ImportError:
             self.skipTest('PyGObject is required to validate desktop Exec parsing')
-        # Avoid ldd on the shell fixture; the real bundle is checked separately.
-        self.fake_executable('thmr',
-            'printf "%s\\n" "$0" "$@" > "$THMR_LAUNCH_PROBE"\n')
         result = self.run_script('install-desktop.sh')
         self.assertEqual(result.returncode, 0, result.stderr)
         if shutil.which('desktop-file-validate'):
@@ -67,8 +66,8 @@ class LinuxDistributionTests(unittest.TestCase):
             if self.probe.exists():
                 break
             time.sleep(0.01)
-        self.assertEqual(self.probe.read_text().splitlines()[0],
-                         str(self.app / 'thmr'))
+        self.assertEqual(self.probe.read_text().splitlines(),
+                         [str(self.app / 'thmr'), 'gui'])
         self.assertEqual(self.run_script('install-desktop.sh').returncode, 0)
         self.assertEqual(self.run_script('uninstall-desktop.sh').returncode, 0)
         self.assertFalse(self.entry.exists())
@@ -91,9 +90,9 @@ class LinuxDistributionTests(unittest.TestCase):
         ldd.write_text('#!/bin/sh\nexit 0\n')
         ldd.chmod(0o755)
         self.env['PATH'] = f'{fake_bin}:{self.env["PATH"]}'
-        self.assertEqual(self.run_script('thmr', '--check-runtime').returncode, 0)
+        self.assertEqual(self.run_script('thmr-gui', '--check-runtime').returncode, 0)
         self.assertFalse(self.probe.exists())
-        result = self.run_script('thmr', '--thmr-update-ack', 'path with spaces',
+        result = self.run_script('thmr-gui', '--thmr-update-ack', 'path with spaces',
                                  '--thmr-update-token', 'abc')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.probe.read_text().splitlines()[1:],
@@ -101,14 +100,14 @@ class LinuxDistributionTests(unittest.TestCase):
                           '--thmr-update-token', 'abc'])
         self.probe.unlink()
         ldd.write_text('#!/bin/sh\nprintf "%s\\n" "libgtk-3.so.0 => not found"\n')
-        result = self.run_script('thmr')
+        result = self.run_script('thmr-gui')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('libgtk-3.so.0', result.stderr)
         self.assertFalse(self.probe.exists())
         ldd.write_text('#!/bin/sh\nexit 0\n')
         self.fake_executable('thmr_runtime_check',
                              'printf "%s\\n" "missing libmpv2" >&2\nexit 1\n')
-        result = self.run_script('thmr')
+        result = self.run_script('thmr-gui')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('libmpv2', result.stderr)
         self.assertFalse(self.probe.exists())

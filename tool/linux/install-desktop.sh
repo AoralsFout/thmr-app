@@ -23,13 +23,14 @@ if [ -e "$entry" ] && ! grep -qx 'X-THMR-Managed=true' "$entry"; then
 fi
 temporary=$(mktemp "$applications/.thmr-desktop.XXXXXX")
 trap 'rm -f -- "$temporary"' EXIT
+# Use a fixed Exec executable so desktop loaders accept escaped bundle paths.
 cat > "$temporary" <<ENTRY
 [Desktop Entry]
 Type=Application
 Name=THMR
 Name[zh_CN]=东方音乐电台 THMR
 Comment=TouHou Music Radio
-Exec=/bin/sh "$quoted/thmr"
+Exec=/usr/bin/env "$quoted/thmr" gui
 Icon=cn.yunmoan.thmr.thmr_app
 Terminal=false
 Categories=AudioVideo;Audio;Music;

@@ -18,13 +18,18 @@ Arch Linux 对应运行库为 `gtk3 mpv libsecret jsoncpp libayatana-appindicato
 ```sh
 tar -xzf thmr-app-linux-x64.tar.gz
 cd bundle
-./thmr --check-runtime
-./thmr
+./thmr doctor
+./thmr                 # 交互终端进入 TUI
+./thmr gui             # 打开图形界面
 ```
 
-保留整个 `bundle/`，不要只复制 `thmr_app`。`thmr` 启动器会检查动态库和 libmpv；
+保留整个 `bundle/`，不要只复制 `thmr` 或 `thmr_app`。根目录的 `thmr` 是统一 CLI，
+支持 `play`、`pause`、`status` 等命令，完整用法可执行 `./thmr --help` 查看。
+将 `bundle/` 的绝对路径加入 PATH 后，也可直接使用 `thmr` 命令。
+`thmr gui` 通过 `thmr-gui` 启动图形界面，该启动器会检查动态库和 libmpv；
 运行库缺失时输出安装提示，有 Zenity/KDialog 时也会显示图形提示。
 直接运行 `thmr_app` 会跳过启动器检查。
+仅检查 GUI 运行库可执行 `./thmr-gui --check-runtime`。
 
 建议先把 `bundle/` 放到当前用户可写、且长期使用的位置，例如 `~/Applications/THMR/`。
 程序目录和其父目录都必须可写，自更新才能创建暂存目录并完成替换。
@@ -39,7 +44,8 @@ cd bundle
 
 脚本只向当前用户的 XDG 数据目录写入菜单入口和图标，无需 sudo，不启用开机自启。
 支持空格、中文及常见特殊字符路径；移动安装目录后需要重新执行。
-桌面入口始终指向固定安装路径中的 `thmr`，整体目录自更新后仍然有效。
+桌面入口调用固定安装路径中的 `thmr gui`，整体目录自更新后仍然有效。
+从旧版 GUI 启动脚本升级后，请重新运行安装脚本，将已有菜单入口切换为新命令。
 
 ```sh
 ./uninstall-desktop.sh
@@ -81,7 +87,9 @@ sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev \
 flutter pub get
 flutter analyze --no-pub
 flutter test --no-pub
+python3 tool/build_native.py
 flutter build linux --release --no-pub
+python3 tool/package_desktop.py --platform linux --bundle build/linux/x64/release/bundle
 python3 tool/verify_linux_bundle.py build/linux/x64/release/bundle --max-glibc 2.39
 python3 tool/test_linux_mpris.py
 python3 -m unittest discover -s tool -p 'test_linux_distribution.py'

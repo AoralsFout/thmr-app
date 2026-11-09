@@ -188,7 +188,8 @@ async fn open_gui() -> Result<()> {
         })
         .and_then(|j| j.get("executable"))
         .and_then(|v| v.as_str())
-        .map(PathBuf::from);
+        .map(PathBuf::from)
+        .map(gui_launcher);
     if let Some(path) = &registered {
         paths.push(path.clone());
     }
@@ -198,12 +199,16 @@ async fn open_gui() -> Result<()> {
         paths.push(dir.join("../MacOS/THMR"));
         paths.push("/Applications/THMR.app/Contents/MacOS/THMR".into());
     } else {
-        paths.push(dir.join("../thmr"));
+        paths.push(dir.join("thmr-gui"));
         paths.push(dir.join("thmr_app"));
     }
-    let gui = paths.into_iter().find(|p| p.is_file()).context(
-        "compatible Flutter GUI not found; install the full package or set THMR_GUI_PATH",
-    )?;
+    let gui = paths
+        .into_iter()
+        .map(gui_launcher)
+        .find(|p| p.is_file() && p.canonicalize().ok() != exe.canonicalize().ok())
+        .context(
+            "compatible Flutter GUI not found; install the full package or set THMR_GUI_PATH",
+        )?;
     if registered.as_ref() != Some(&gui) {
         let directory = gui.parent().context("invalid GUI path")?;
         let compatible = [
@@ -223,6 +228,21 @@ async fn open_gui() -> Result<()> {
     spawn_detached(&gui, &["--thmr-daemon"])?;
     println!("已打开 THMR 图形客户端");
     Ok(())
+}
+fn gui_launcher(path: PathBuf) -> PathBuf {
+    // Older Linux GUIs registered the root `thmr` launcher. That path now
+    // contains the CLI, so resolve it to the checked GUI launcher instead.
+    #[cfg(target_os = "linux")]
+    if matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("thmr" | "thmr_app")
+    ) {
+        let launcher = path.with_file_name("thmr-gui");
+        if launcher.is_file() {
+            return launcher;
+        }
+    }
+    path
 }
 async fn doctor() -> Result<()> {
     println!("THMR {VERSION}+{BUILD_NUMBER} · protocol {PROTOCOL_VERSION}");

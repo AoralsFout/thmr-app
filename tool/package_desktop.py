@@ -29,7 +29,7 @@ def stage(system, bundle, native, terminal_only=False):
     output.mkdir(parents=True)
     # macOS commonly uses a case-insensitive filesystem: "thmr" would replace
     # the Flutter executable named "THMR" if copied beside it.
-    destination = bundle / 'Contents/Helpers' if system == 'macos' else bundle / 'bin' if system == 'linux' else bundle
+    destination = bundle / 'Contents/Helpers' if system == 'macos' else bundle
     suffix = '.exe' if system == 'windows' else ''
     if not terminal_only:
         destination.mkdir(parents=True, exist_ok=True)
