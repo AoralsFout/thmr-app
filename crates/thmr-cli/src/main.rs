@@ -195,7 +195,7 @@ async fn open_gui() -> Result<()> {
     if cfg!(windows) {
         paths.push(dir.join("thmr_app.exe"));
     } else if cfg!(target_os = "macos") {
-        paths.push(dir.join("THMR"));
+        paths.push(dir.join("../MacOS/THMR"));
         paths.push("/Applications/THMR.app/Contents/MacOS/THMR".into());
     } else {
         paths.push(dir.join("../thmr"));

@@ -56,6 +56,33 @@ class TerminalPackaging(unittest.TestCase):
                 self.assertTrue((bundle / 'bin/thmr').exists())
                 self.assertTrue((output / 'bin/thmrd').exists())
 
+    def test_macos_helpers_preserve_case_insensitive_gui_executable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            native = root / 'native'
+            bundle = root / 'THMR.app'
+            (root / 'docs').mkdir()
+            (root / 'docs/TERMINAL.md').write_text('terminal instructions')
+            native.mkdir()
+            gui = bundle / 'Contents/MacOS/THMR'
+            gui.parent.mkdir(parents=True)
+            gui.write_bytes(b'Flutter GUI executable')
+            audio = bundle / 'Contents/Frameworks/Mpv.framework/Mpv'
+            audio.parent.mkdir(parents=True)
+            audio.write_bytes(b'pinned audio')
+            for name in ['thmr', 'thmrd']:
+                (native / name).write_bytes(name.encode())
+            def output(args, **kwargs):
+                if args[0] == 'otool':
+                    return 'Mpv:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0)\n'
+                return self.version_output(args, **kwargs)
+            with patch.object(package, 'ROOT', root), patch.object(package.subprocess, 'check_output', side_effect=output):
+                terminal = package.stage('macos', bundle, native)
+                self.assertEqual(gui.read_bytes(), b'Flutter GUI executable')
+                self.assertEqual((bundle / 'Contents/Helpers/thmr').read_bytes(), b'thmr')
+                self.assertTrue((bundle / 'Contents/Helpers/thmrd').exists())
+                self.assertTrue((terminal / 'THMRHost.app/Contents/Frameworks/Mpv.framework/Mpv').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

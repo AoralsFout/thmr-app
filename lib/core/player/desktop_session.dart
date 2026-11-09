@@ -30,6 +30,8 @@ class DesktopSession {
   static Future<DesktopSession> open() async {
     final sibling = p.joinAll([
       p.dirname(Platform.resolvedExecutable),
+      if (Platform.isMacOS) '..',
+      if (Platform.isMacOS) 'Helpers',
       if (Platform.isLinux) 'bin',
       Platform.isWindows ? 'thmr.exe' : 'thmr'
     ]);

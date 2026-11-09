@@ -118,7 +118,15 @@ class UpdateHelperTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0 if succeeds or native_launcher else 1)
             if os.name == 'nt':
                 # The rollback helper starts the old fixture asynchronously.
-                # Wait for that exact process before removing its mapped EXE.
+                # Its PID file can appear after the helper has returned. Wait
+                # for startup as well as exit before removing the mapped EXE.
+                expected_record = tx / ('new.pid' if succeeds else 'old.pid')
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if expected_record.exists() and expected_record.read_text(encoding='utf-8-sig').isdigit():
+                        break
+                    time.sleep(.05)
+                self.assertTrue(expected_record.exists(), 'Updated or restored fixture did not start')
                 import ctypes
                 kernel = ctypes.WinDLL('kernel32', use_last_error=True)
                 kernel.OpenProcess.restype = ctypes.c_void_p

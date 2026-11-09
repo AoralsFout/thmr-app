@@ -63,7 +63,7 @@ PY
 fi
 codesign --verify --deep --strict "$host"
 python3 tool/package_desktop.py --platform macos --archive-only
-THMR_NO_SYSTEM_MEDIA=1 python3 tool/test_unified_host.py --bin-dir "$app/Contents/MacOS"
+THMR_NO_SYSTEM_MEDIA=1 python3 tool/test_unified_host.py --bin-dir "$app/Contents/Helpers"
 THMR_NO_SYSTEM_MEDIA=1 python3 tool/test_unified_host.py --bin-dir build/terminal/macos/bin
 
 # Both distributions come from the same app, after signing and stapling.
