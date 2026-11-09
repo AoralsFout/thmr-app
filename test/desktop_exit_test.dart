@@ -93,7 +93,9 @@ void main() {
           await file.delete();
         }
         if (rejectShutdown) {
-          await expectLater(quit(), throwsStateError);
+          // Strict session shutdown still reports failure to callers that
+          // require confirmation; explicit GUI exit is tested separately.
+          await expectLater(session.shutdown(), throwsStateError);
           expect(exited, isFalse);
           expect(playing, isTrue);
           rejectShutdown = false;

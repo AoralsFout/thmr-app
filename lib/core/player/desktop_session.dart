@@ -211,6 +211,7 @@ class DesktopSession {
       if (await _instanceFile.exists()) rethrow;
     }
     for (var attempt = 0; attempt < 60; attempt++) {
+      if (_disposed) return;
       final current = await readEndpoint();
       if (current == null) {
         await dispose();
@@ -297,8 +298,9 @@ class DesktopSession {
     _disposed = true;
     ++_epoch;
     _retry?.cancel();
-    await _socket?.close();
+    // Abort pending IPC before awaiting WebSocket/stream teardown.
     _http.close(force: true);
+    await _socket?.close();
     await _events.close();
     await _errors.close();
   }

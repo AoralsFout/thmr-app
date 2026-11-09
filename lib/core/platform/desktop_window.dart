@@ -38,17 +38,33 @@ Future<void> restoreDesktopWindow() async {
 
 /// Also used by native application-exit requests (for example macOS Cmd+Q).
 Future<void> prepareDesktopApplicationExit() async {
-  await DesktopSession.current?.shutdown();
+  final session = DesktopSession.current;
+  if (session == null) return;
+  try {
+    // Stopping playback is best-effort on explicit exit. A stale endpoint or
+    // unresponsive local host must never trap the user in the application.
+    await session.shutdown().timeout(const Duration(seconds: 2));
+  } catch (error) {
+    debugPrint(
+        'Playback shutdown unavailable; continuing exit (${error.runtimeType})');
+  } finally {
+    try {
+      await session.dispose().timeout(const Duration(milliseconds: 500));
+    } catch (error) {
+      debugPrint(
+          'Playback connection cleanup incomplete (${error.runtimeType})');
+    }
+  }
 }
 
-/// Stop shared playback before any platform's process termination path.
+/// Attempt to stop shared playback before any platform's process termination path.
 /// Both GTK window destruction and Flutter's application exit can race native
 /// plugin/engine threads during shutdown. Avoid that teardown after cleanup.
 Future<void> quitDesktopApplication(Future<void> Function() releaseResources,
     {TargetPlatform? platform, void Function(int)? exitProcess}) async {
   final target = platform ?? defaultTargetPlatform;
-  // Windows deliberately bypasses plugin teardown. Remote audio must already
-  // be stopped when TerminateProcess ends the GUI immediately.
+  // Windows deliberately bypasses plugin teardown. Playback shutdown has a
+  // bounded opportunity to finish before TerminateProcess ends the GUI.
   await prepareDesktopApplicationExit();
   if (target == TargetPlatform.windows) {
     if (exitProcess != null) {
