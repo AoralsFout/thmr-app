@@ -128,8 +128,26 @@ def main():
             process = subprocess.Popen([str(cli), 'tui'], env=dict(env, TERM='xterm-256color'),
                 stdin=slave, stdout=slave, stderr=slave)
             os.close(slave)
-            time.sleep(0.5)
-            return process, master
+            ready = threading.Event()
+            output = bytearray()
+            def drain():
+                try:
+                    while True:
+                        data = os.read(master, 8192)
+                        if not data: break
+                        output.extend(data)
+                        if len(output) > 32768: del output[:-32768]
+                        ready.set()
+                except OSError:
+                    pass
+            reader = threading.Thread(target=drain, daemon=True)
+            reader.start()
+            if not ready.wait(10):
+                process.kill()
+                process.wait()
+                os.close(master)
+                raise AssertionError('TUI did not render its first frame')
+            return process, master, output, reader
         try:
             wait_for(state)
             wait_for(lambda: state().get('stationStatus'))
@@ -137,13 +155,17 @@ def main():
             wait_for(lambda: state()['phase'] == 'online')
             interactive = terminal()
             if interactive:
-                tui, master = interactive
+                tui, master, output, reader = interactive
                 try:
                     os.write(master, b'q')
                     assert tui.wait(timeout=8) == 0
                     assert state()['phase'] == 'online', 'q unexpectedly stopped playback'
+                except Exception:
+                    print(bytes(output).decode(errors='replace'))
+                    raise
                 finally:
                     if tui.poll() is None: tui.kill(); tui.wait()
+                    reader.join(timeout=2)
                     os.close(master)
             duplicate = subprocess.run([str(host)], env=env, capture_output=True, timeout=10)
             assert duplicate.returncode != 0
@@ -169,11 +191,15 @@ def main():
             interactive = terminal()
             command('daemon', 'prepare-update')
             if interactive:
-                tui, master = interactive
+                tui, master, output, reader = interactive
                 try:
                     assert tui.wait(timeout=8) == 0, 'TUI did not leave before update'
+                except Exception:
+                    print(bytes(output).decode(errors='replace'))
+                    raise
                 finally:
                     if tui.poll() is None: tui.kill(); tui.wait()
+                    reader.join(timeout=2)
                     os.close(master)
             process.wait(timeout=10)
             assert process.returncode == 0
