@@ -1,5 +1,6 @@
 import 'dart:async' show unawaited;
 import 'dart:io' show Directory, File, Platform;
+import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -43,6 +44,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
   bool _trayReady = false;
   LinuxTrayMonitor? _trayMonitor;
   Directory? _trayDirectory;
+  AppLifecycleListener? _appLifecycle;
 
   static const _destinations = [
     (icon: Icons.radio_outlined, selected: Icons.radio, label: '收听'),
@@ -89,6 +91,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
   @override
   void initState() {
     super.initState();
+    if (DesktopSession.current != null) {
+      _appLifecycle =
+          AppLifecycleListener(onExitRequested: _onAppExitRequested);
+    }
     Future.microtask(() {
       if (mounted) {
         unawaited(ref.read(radioSourceProvider.notifier).ensureSelected());
@@ -202,7 +208,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     }
   }
 
-  Future<void> _quit() => quitDesktopApplication(() async {
+  Future<void> _quit() async {
+    try {
+      await quitDesktopApplication(() async {
         _trayMonitor?.dispose();
         _trayMonitor = null;
         if (DesktopSession.current == null) {
@@ -214,6 +222,29 @@ class _HomeShellState extends ConsumerState<HomeShell>
         await trayManager.destroy();
         await _trayDirectory?.delete(recursive: true);
       });
+    } catch (error) {
+      _exitFailed(error);
+    }
+  }
+
+  Future<AppExitResponse> _onAppExitRequested() async {
+    _closing = true;
+    try {
+      await prepareDesktopApplicationExit();
+      return AppExitResponse.exit;
+    } catch (error) {
+      _exitFailed(error);
+      return AppExitResponse.cancel;
+    }
+  }
+
+  void _exitFailed(Object error) {
+    _closing = false;
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('无法停止后台播放，客户端尚未退出：$error')),
+    );
+  }
 
   @override
   void onWindowClose() async {
@@ -257,11 +288,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(DesktopSession.current != null
-                  ? '关闭窗口或退出图形界面后，电台仍会在后台播放。停止收听请先点击暂停或停止。'
-                  : trayAvailable
-                      ? '最小化到托盘将保持后台放送,随时从托盘恢复。'
-                      : '当前桌面托盘不可用，将最小化到任务栏并继续放送。'),
+              Text(trayAvailable
+                  ? '最小化到托盘将继续播放，随时可从托盘恢复。退出程序将停止播放。'
+                  : '最小化到任务栏将继续播放。退出程序将停止播放。'),
               const SizedBox(height: 10),
               SizedBox(
                 height: 40,
@@ -327,6 +356,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   @override
   void dispose() {
+    _appLifecycle?.dispose();
     _trayMonitor?.dispose();
     if (hasDesktopWindowControls) {
       windowManager.removeListener(this);
@@ -349,7 +379,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     if (!_autoTried && (pbPhase != PlaybackPhase.idle || pbPaused)) {
       _autoTried = true;
     }
-    if (!_autoTried &&
+    if (!_closing &&
+        !_autoTried &&
         settings.autoPlay &&
         stationReady &&
         sourceReady &&
@@ -358,7 +389,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
       final url = ref.read(streamUrlProvider);
       if (url != null) {
         _autoTried = true;
-        Future.microtask(() => ref.read(playbackProvider.notifier).tune(url));
+        Future.microtask(() {
+          if (mounted && !_closing) {
+            unawaited(ref.read(playbackProvider.notifier).tune(url));
+          }
+        });
       }
     }
     final stack = Stack(

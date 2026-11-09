@@ -16,6 +16,6 @@ Live playback has no seek, previous or next capability. Pause stops downloading 
 
 `test_sources` starts bounded anonymous probes and reports `sourceTesting`/`sourceMeasurements` in subsequent snapshots. It preserves an explicitly selected source. Probes never forward playback credentials.
 
-`prepare_update` publishes a final snapshot with `shutdownReason: "update"`, then stops audio and releases the endpoint and instance lock. Attached TUI clients leave on this notification; the GUI updater waits for the host to exit before replacing the installation. Other clients must treat a new `instanceId` as a new session and discard their previous revision. GUI and TUI closure normally detaches without stopping the host; `shutdown` is the explicit global exit.
+`prepare_update` publishes a final snapshot with `shutdownReason: "update"`, then stops audio and releases the endpoint and instance lock. Attached TUI clients leave on this notification; the GUI updater waits for the host to exit before replacing the installation. Other clients must treat a new `instanceId` as a new session and discard their previous revision. TUI `q` detaches without stopping the host. Explicit GUI exit sends `shutdown` and waits for the host to release its endpoint before closing; minimizing/hiding the GUI keeps playback running.
 
 `THMR_RUNTIME_DIR` and `THMR_CONFIG_DIR` override user paths for isolated development/testing. They must point to directories owned by the current user. Configuration is non-secret TOML; credentials never belong in source URLs, process arguments or logs.

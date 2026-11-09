@@ -24,6 +24,8 @@ thmr daemon stop       关闭宿主
 
 TUI：空格播放/暂停，`+/-` 调音量，`1/2/a` 选择来源，`b` 切码率，`r` 刷新，`s` 停止，`q` 离开界面并保留后台播放。直播不能点播、seek 或本地跳歌，恢复时连接当前广播位置。
 
+GUI 选择“退出程序”或托盘菜单“退出”会停止播放并关闭共享宿主；最小化到托盘/任务栏继续播放。TUI 的 `q` 仍保留后台播放。
+
 完整 Linux 包保留原 `thmr` GUI 启动脚本，终端命令位于 `bin/thmr`；将完整包的 `bin` 加入 PATH。macOS 完整包中的命令位于 `THMR.app/Contents/Helpers`，避免与 GUI 的 `THMR` 文件名冲突。独立终端包可用 `THMR_GUI_PATH` 或设置文件中的 `guiPath` 指定已安装 GUI。
 
 ## 开发构建

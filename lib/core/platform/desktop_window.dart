@@ -6,6 +6,7 @@ import 'package:flutter/material.dart' show Colors, Size;
 import 'package:window_manager/window_manager.dart';
 
 import 'windows_process_exit.dart';
+import '../player/desktop_session.dart';
 
 bool get hasDesktopWindowControls =>
     !kIsWeb && (Platform.isWindows || Platform.isLinux);
@@ -35,20 +36,34 @@ Future<void> restoreDesktopWindow() async {
   await windowManager.focus();
 }
 
-/// Stop Linux playback and background work before terminating the process.
+/// Also used by native application-exit requests (for example macOS Cmd+Q).
+Future<void> prepareDesktopApplicationExit() async {
+  await DesktopSession.current?.shutdown();
+}
+
+/// Stop shared playback before any platform's process termination path.
 /// Both GTK window destruction and Flutter's application exit can race native
 /// plugin/engine threads during shutdown. Avoid that teardown after cleanup.
 Future<void> quitDesktopApplication(Future<void> Function() releaseResources,
-    {TargetPlatform? platform, void Function(int) exitProcess = exit}) async {
+    {TargetPlatform? platform, void Function(int)? exitProcess}) async {
   final target = platform ?? defaultTargetPlatform;
-  if (target == TargetPlatform.windows) terminateWindowsProcess();
+  // Windows deliberately bypasses plugin teardown. Remote audio must already
+  // be stopped when TerminateProcess ends the GUI immediately.
+  await prepareDesktopApplicationExit();
+  if (target == TargetPlatform.windows) {
+    if (exitProcess != null) {
+      exitProcess(0);
+      return;
+    }
+    terminateWindowsProcess();
+  }
   try {
     await releaseResources().timeout(const Duration(seconds: 3));
   } catch (error) {
     debugPrint('Desktop resource cleanup failed: $error');
   }
   if (target == TargetPlatform.linux) {
-    exitProcess(0);
+    (exitProcess ?? exit)(0);
     return;
   }
   try {

@@ -26,6 +26,7 @@ class DesktopSession {
   bool _disposed = false;
   String? _cliPath;
   int _epoch = 0;
+  Future<void>? _shutdownFuture;
 
   static Future<DesktopSession> open() async {
     final sibling = p.joinAll([
@@ -144,6 +145,9 @@ class DesktopSession {
 
   Future<Map<String, dynamic>> execute(String command,
       [Map<String, dynamic> fields = const {}]) async {
+    if (_disposed || _shutdownFuture != null) {
+      throw StateError('客户端正在退出。');
+    }
     // No automatic retries: toggle must never be executed twice.
     Map<String, dynamic> result;
     final previousInstance = snapshot['instanceId'];
@@ -154,7 +158,9 @@ class DesktopSession {
       final offline = error is FileSystemException ||
           error is SocketException ||
           error is HttpException;
-      if (!offline ||
+      if (_disposed ||
+          _shutdownFuture != null ||
+          !offline ||
           _cliPath == null ||
           (command != 'play' && command != 'toggle')) {
         rethrow;
@@ -175,6 +181,48 @@ class DesktopSession {
     }
     _accept(result);
     return result;
+  }
+
+  /// Explicit GUI exit stops the shared player; hiding/minimizing only detaches UI.
+  Future<void> shutdown() =>
+      _shutdownFuture ??= _shutdownHost().whenComplete(() {
+        _shutdownFuture = null;
+      });
+
+  Future<void> _shutdownHost() async {
+    if (_disposed) return;
+    Future<Map<String, dynamic>?> readEndpoint() async {
+      try {
+        return await _endpoint();
+      } on FileSystemException {
+        if (!await _instanceFile.exists()) return null;
+        rethrow;
+      }
+    }
+
+    final endpoint = await readEndpoint();
+    if (endpoint == null) {
+      await dispose();
+      return;
+    }
+    try {
+      _accept(await _request(endpoint, {'command': 'shutdown'}));
+    } catch (_) {
+      // The host can finish shutdown before its response reaches this client.
+      if (await _instanceFile.exists()) rethrow;
+    }
+    for (var attempt = 0; attempt < 60; attempt++) {
+      final current = await readEndpoint();
+      if (current == null) {
+        await dispose();
+        return;
+      }
+      if (current['instanceId'] != endpoint['instanceId']) {
+        throw StateError('播放进程已变更，请重试退出。');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    throw StateError('后台播放未能停止，请重试退出。');
   }
 
   /// Called only once an update helper has staged and accepted the new package.

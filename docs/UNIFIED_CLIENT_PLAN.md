@@ -38,7 +38,7 @@
 - [x] Flutter 桌面 daemon adapter：命令、快照、重连与元数据。
 - [x] 桌面禁用本地 Player、重复状态轮询和重复媒体注册；移动端保留原播放路径。
 - [x] 来源、码率、音量统一归宿主；主题/窗口设置继续归 GUI。
-- [x] 自动验证单实例、界面关闭保留播放、宿主重启、暂停期间切来源/码率。
+- [x] 自动验证单实例、TUI 离开保留播放、宿主重启、暂停期间切来源/码率；GUI 最小化保留播放，明确退出时关闭宿主。
 
 ### P4：构建与发行
 
@@ -61,7 +61,7 @@ Windows x64、Linux x64、macOS arm64/x64 首期优先。macOS 完整包与终�
 
 1. TUI 和 GUI 并发启动只有一个播放宿主和音频连接。
 2. 系统媒体键、CLI、TUI、GUI 的播放暂停状态一致。
-3. 关闭界面保留播放；明确停止/退出后关闭音频并释放资源。
+3. TUI 按 `q`、GUI 最小化保留播放；GUI 明确退出时停止播放并关闭宿主。
 4. 暂停期间断网恢复、切来源或换码率不自动播放。
 5. 状态请求失败不打断正常音频；重试到上限后可主动恢复。
 6. 不兼容协议明确报错，不静默生成第二个播放器。
@@ -72,13 +72,14 @@ Windows x64、Linux x64、macOS arm64/x64 首期优先。macOS 完整包与终�
 - 2026-11-09：确认上游 v0.1.6 基线和本机 Rust 1.96.0、Flutter 3.47.5；建立计划。
 - P1–P4 的开发预览已实现，版本为 `0.2.0-dev.1`，本机协议为 `1`。实施过程按阶段提交并推送到 fork；没有创建稳定标签、发布正式更新或修改上游主分支。
 - 三平台 Rust 格式、Clippy、单元测试与可执行程序检查通过：[Native host #42550302635](https://github.com/AoralsFout/thmr-app/actions/runs/42550302635)，运行代码提交 `116a22b`。Linux 私有 D-Bus 会话、macOS 无窗口原生媒体宿主均运行真实 libmpv 本地音频流；Unix 伪终端验证 `q` 保留播放、更新通知退出 TUI。
-- 本地 Windows 完整包和终端包已构建，使用 MSVC 静态 CRT。隔离测试验证 GUI 健康回执、CLI 启动 GUI、重复启动、GUI 退出保留音频；真实 THMR MP3 免登录流在空音频输出下通过有界验证。
+- 本地 Windows 完整包和终端包已构建，使用 MSVC 静态 CRT。隔离测试验证 GUI 健康回执、CLI 启动 GUI、重复启动、GUI 异常终止后宿主继续运行；真实 THMR MP3 免登录流在空音频输出下通过有界验证。
 - Windows CI 预览为 `0.2.0-dev.1+1101`；完整包、终端包、版本信息和 SHA-256 文件下载至 `build/unified-preview/ci/windows/`（不提交生成产物）。仓库仍保留手工构建号 `+1`，CI 按工作流规则生成统一构建号。
 - macOS 原生程序放在 `Contents/Helpers`，避免默认大小写不敏感的文件系统把 CLI `thmr` 与 GUI `THMR` 混为一个文件；打包回归测试检查 GUI 保留及 helper 路径。手动预览构建可选择单个平台，且禁止发布 Release。
 - 平台构建与对应自动检查通过：[Windows x64](https://github.com/AoralsFout/thmr-app/actions/runs/42547163840/job/128935228023)、[Linux x64](https://github.com/AoralsFout/thmr-app/actions/runs/42547163840/job/128935227980)、[Android APK](https://github.com/AoralsFout/thmr-app/actions/runs/42547163840/job/128935228075)。
 - [macOS universal 构建](https://github.com/AoralsFout/thmr-app/actions/runs/42550307337)中，两类包的真实 libmpv 播放测试、22 个 Mach-O 文件的架构/签名检查、ZIP 与 DMG 的 GUI 首帧健康回执均通过。Apple Silicon 切片已编入并检查，执行测试使用 Intel runner；公开发行签名与实机验收另列在下方。
 - [macOS 预览附件](https://github.com/AoralsFout/thmr-app/actions/runs/42550307337/artifacts/13647322358)已上传，包含 universal GUI ZIP、DMG 和独立终端包。运行代码为 `116a22b`；最后的收尾提交只更新文档。
 - Flutter 分析、完整测试，以及协议、设置、打包、更新器测试通过。本地完整 Python 测试为 37 项、3 项平台相关跳过；更新器夹具等待回滚进程启动和退出后再清理。GUI 自更新先请求 `prepare_update`，等待宿主退出后再替换文件；终端包保留手动升级方式。
+- 本地修正 GUI 退出语义：明确退出先停止并关闭宿主；最小化与 TUI `q` 保留播放。Windows 的快速进程退出放在宿主关停之后，退出期间禁用 GUI 自动连播/播放重试；关停失败保留界面提示重试。回归覆盖正常退出、宿主已停、失败后重试，以及真实 thmrd 进程关停。此修复仅在本地提交，尚未推送；Windows 本地包位于 `build/unified-preview/local-exit-fix/`，实际 GUI 点击自动化因应用控制授权超时未完成。
 
 ## 正式发行前的人工验收与后续工作
 

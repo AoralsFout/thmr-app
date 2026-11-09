@@ -71,7 +71,7 @@ def main():
                 result = subprocess.run([str(cli), 'status', '--json'], env=env, capture_output=True, encoding='utf-8', timeout=10)
                 state = json.loads(result.stdout)
                 assert state['instanceId'] == before and state['volume'] == 37
-                print('PASS: Flutter healthy first frame, shared host/CLI settings, GUI exit preserves host')
+                print('PASS: Flutter healthy first frame, shared host/CLI settings, abrupt GUI termination preserves host')
             except Exception:
                 log.seek(0)
                 print(log.read())
