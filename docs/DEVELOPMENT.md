@@ -94,7 +94,9 @@ $env:THMR_CLI_PATH = "$PWD/target/x86_64-pc-windows-msvc/debug/thmr.exe"
 flutter run -d windows
 ```
 
-移动端使用 `flutter run -d <设备 ID>`。本地宿主还需可用的 libmpv；可通过 `THMR_MPV_LIBRARY` 指定库文件，或使用完整桌面包内的依赖。
+Windows 原生构建会从 `flutter pub get` 解析到的音频插件读取 libmpv 下载地址与校验值，自动下载或复用已校验的缓存，将 `libmpv-2.dll` 放到对应 debug/release EXE 旁边，并执行 `thmrd --check` 验证。无需先构建 Flutter GUI 或手动复制 DLL；首次需要联网，直链失败时通过 GitHub 官方 Release API 获取同一资产并继续校验。解包使用 PATH 中的 CMake 或 Windows 自带的 `tar.exe`。
+
+移动端使用 `flutter run -d <设备 ID>`。Linux/macOS 本地宿主还需系统可用的 libmpv；自定义开发库可通过 `THMR_MPV_LIBRARY` 指定。
 
 `--dart-define=THMR_LOCAL_PLAYER=true` 仅用于诊断应用内播放器路径；正式桌面包默认连接共享宿主。
 
