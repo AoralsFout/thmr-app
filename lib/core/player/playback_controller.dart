@@ -13,7 +13,7 @@ import 'audio_engine.dart';
 import 'shared_radio_stream.dart';
 import 'desktop_session.dart';
 
-/// 播放状态机 — 与 Web 端 player store 对齐(FLUTTER.md 4.4)。
+/// 播放状态机；桌面代理共享宿主，应用内播放处理本地引擎事件。
 enum PlaybackPhase { idle, connecting, online, buffering, reconnecting }
 
 class PlaybackState {
@@ -225,7 +225,7 @@ class PlaybackController extends StateNotifier<PlaybackState> {
     });
   }
 
-  /// 连接直播流(换码率 = 换地址重连,FLUTTER.md 4.2)。
+  /// 连接直播流，换码率时换地址重连并保留暂停意图。
   Future<void> tune(String url, {bool autoplay = true}) async {
     if (_remote != null) {
       final profile = Uri.parse(url).pathSegments.last;

@@ -9,7 +9,7 @@ import '../api/thmr_api.dart';
 import '../models/models.dart';
 import 'collection_cache.dart';
 
-/// 认证状态:token 存储后请求统一 Bearer(FLUTTER.md 第六章)。
+/// 认证状态：token 存储后请求统一使用 Bearer，见 docs/API.md。
 /// 注:必须与 SettingsController 用同一套 SharedPreferences(legacy 实例)。
 /// Windows 端 legacy 与 SharedPreferencesAsync 是两个独立缓存实例却读写
 /// 同一个文件,混用会互相整份覆盖(登录 token 曾因此丢失)。

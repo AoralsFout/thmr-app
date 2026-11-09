@@ -79,7 +79,7 @@ class ThmrTokens extends ThemeExtension<ThmrTokens> {
     shadow: Color(0x1A54222E),
     solidPanel: Color(0xFFFFFBFC),
     codeInk: Color(0xFF342229),
-    illustration: 'assets/brand/background_alt.png',
+    illustration: 'assets/brand/background.png',
   );
 
   static const ThmrTokens reimuDark = ThmrTokens(
@@ -104,7 +104,7 @@ class ThmrTokens extends ThemeExtension<ThmrTokens> {
     shadow: Color(0x52000000),
     solidPanel: Color(0xFF1F1317),
     codeInk: Color(0xFFF4DFE6),
-    illustration: 'assets/brand/background_alt.png',
+    illustration: 'assets/brand/background.png',
   );
 
   /// Marisa — 黑金星尘.
@@ -130,7 +130,7 @@ class ThmrTokens extends ThemeExtension<ThmrTokens> {
     shadow: Color(0x1A5A4A28),
     solidPanel: Color(0xFFFFFDF4),
     codeInk: Color(0xFF3A3014),
-    illustration: 'assets/brand/marisa_background_alt.png',
+    illustration: 'assets/brand/marisa_background.png',
   );
 
   static const ThmrTokens marisaDark = ThmrTokens(
@@ -155,7 +155,7 @@ class ThmrTokens extends ThemeExtension<ThmrTokens> {
     shadow: Color(0x52000000),
     solidPanel: Color(0xFF1F1A10),
     codeInk: Color(0xFFF2E6C8),
-    illustration: 'assets/brand/marisa_background_alt.png',
+    illustration: 'assets/brand/marisa_background.png',
   );
 
   /// Cirno — 冰蓝.
@@ -181,7 +181,7 @@ class ThmrTokens extends ThemeExtension<ThmrTokens> {
     shadow: Color(0x1A304450),
     solidPanel: Color(0xFFF8FCFE),
     codeInk: Color(0xFF1E3440),
-    illustration: 'assets/brand/baka_background_alt.png',
+    illustration: 'assets/brand/baka_background.png',
   );
 
   static const ThmrTokens cirnoDark = ThmrTokens(
@@ -206,7 +206,7 @@ class ThmrTokens extends ThemeExtension<ThmrTokens> {
     shadow: Color(0x52000000),
     solidPanel: Color(0xFF101A20),
     codeInk: Color(0xFFD8ECF4),
-    illustration: 'assets/brand/baka_background_alt.png',
+    illustration: 'assets/brand/baka_background.png',
   );
 
   static ThmrTokens resolve(AccentTheme theme, Brightness brightness) {

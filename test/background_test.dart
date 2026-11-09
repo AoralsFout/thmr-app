@@ -31,7 +31,7 @@ void main() {
       ),
     ));
     await tester.runAsync(() => precacheImage(
-          const AssetImage('assets/brand/background_alt.png'),
+          const AssetImage('assets/brand/background.png'),
           key.currentContext!,
         ));
     await tester.pumpAndSettle();

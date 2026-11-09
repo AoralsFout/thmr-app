@@ -1,78 +1,30 @@
-# THMR 客户端
+# THMR 东方音乐电台
 
-东方音乐电台 **THMR(TouHouMusicRadio)** 跨平台客户端 — Windows / macOS / Linux / Android / iOS。
+东方音乐电台 **THMR(TouHouMusicRadio)** 跨平台客户端 — Windows / macOS / Linux / Android / iOS。支持 Flutter 图形界面或无需图形界面的 CLI / TUI 终端客户端。
 
-本仓库共同维护 Flutter 图形界面、Rust CLI/TUI 和桌面播放宿主 `thmrd`。桌面各入口共享播放会话，移动端继续应用内播放。完整桌面包包含终端程序，也提供不依赖 Flutter 的终端包。当前为 `0.2.0-dev.1` 开发预览，安装与构建见 [终端使用说明](docs/TERMINAL.md)，进度见 [实施计划](docs/UNIFIED_CLIENT_PLAN.md)。
+## 安装与使用
 
-对接双后端(均无需改动):
+从项目 Release 或 Actions 构建附件获取安装包。桌面压缩包需保留完整目录；macOS 将 DMG 中的 `THMR.app` 拖入 Applications。iOS 暂无本仓库提供的发行包。
 
-- Radio 流媒体后端:`https://radio.yunmoan.cn`(状态 / 直播流 / 封面 / 反馈)
-- THMR 账号后端公开入口:`https://thmr.yunmoan.cn`(Natayark 登录 / 收藏 / 投票 / 曲库代理)
+| 平台 | 图形界面+终端安装包 | 仅终端包 |
+| --- | --- | --- |
+| Windows x64 | `thmr-app-windows-x64.zip` | `thmr-terminal-windows-x64.zip` |
+| macOS Intel / Apple Silicon | `thmr-app-macos-universal.dmg`，另有自更新用 ZIP | `thmr-terminal-macos-universal.tar.gz` |
+| Linux x64 | `thmr-app-linux-x64.tar.gz` | `thmr-terminal-linux-x64.tar.gz` |
+| Android | `thmr-app-android.apk` | — |
 
-接口契约详见 [FLUTTER.md](FLUTTER.md)。
+Linux 完整包解压后：
 
-## 快速开始
-
-```bash
-flutter pub get
-flutter run -d windows --dart-define=THMR_LOCAL_PLAYER=true # 验证原应用内播放器
-flutter run -d macos --dart-define=THMR_LOCAL_PLAYER=true   # 在 macOS 上运行
-flutter run -d linux --dart-define=THMR_LOCAL_PLAYER=true
-flutter run -d <android-device> # Android
+```sh
+cd bundle
+./thmr gui             # 图形界面
+./thmr                 # 交互终端进入 TUI
+./install-desktop.sh   # 当前用户的应用菜单入口
 ```
 
-统一桌面模式需要先构建 Rust 程序，并通过 `THMR_CLI_PATH` 指向已构建的 `thmr`，或使用打包后的完整目录启动；详见上述构建说明。正式桌面包默认使用共享宿主。
+终端包将 `bin` 加入 PATH，即可使用 `thmr play`、`thmr pause`、`thmr status` 等命令。TUI 按 `q` 离开后继续后台播放；GUI 最小化后继续播放，明确退出则停止播放并关闭宿主。
 
-## 播放源与网络诊断
-
-在「我的 → 播放与网络」选择「自动测速」「源 1」或「源 2」，选择会持久化。
-自动模式在启动时同时对两路直播流进行有界采样，优先选择连接并读取 32 KiB 音频更快的可用来源；也可手动重新测速。
-播放中切换来源会保留码率并重新连接，已暂停时保持暂停。手动指定来源不会被测速结果覆盖。
-
-点击「网络诊断」即可查看公网 IP 与属地（`https://myip.ipip.net/json`）、本机 IPv4/IPv6 接口、系统环境、应用与系统内存，以及六个服务的 HTTP 状态、响应耗时、DNS、实际连接 IP 和 CDN 响应标识。
-诊断以收到 HTTP 响应为连通，包含域名根路径的 404；节点名称未公开时仅展示实际 IP 与服务端提供的标识。
-「导出 TXT」使用系统另存为窗口，生成含 UTF-8 BOM 的中文文本报告；不写入登录凭据、Cookie 或流媒体访问密钥。
-
-开发时可用 `dart tool/diagnostics_smoke.dart` 检查真实接口并在本地 `build/` 生成报告，普通测试使用本地服务或模拟结果。
-
-## 客户端版本与自动更新
-
-客户端只向 `https://api.zyghit.cn/updater/thmr` 检查更新。支持后台下载、Ed25519 清单验签、SHA-256 文件校验、准确匹配平台架构、应用内安装；桌面端自动替换和重启，启动失败自动恢复旧版。Android 使用系统安装器，仍需用户确认。自动检查与自动下载均可关闭，支持取消下载和忽略版本。
-
-界面、更新比较和安装包统一使用客户端构建版本。CI 标签 `v0.2.0` 对应 `0.2.0`，构建号是 `Actions run number × 100 + run attempt`；普通本地构建取 `pubspec.yaml`，可由 `--build-name` / `--build-number` 覆盖。更新 API 不依赖电台或账号后端的版本号。
-
-API 插件单独交付为 OPENAPI-Next-Core 的 Next ZIP 包，也兼容 legacy 单文件方式；保留原 `/ofcpl` 路由，不纳入客户端仓库。完整的密钥、API 插件部署、GitHub Variables/Secrets、Android 签名、macOS 公证和发版步骤见 **[自动更新配置文档](docs/AUTO_UPDATE.md)**。
-
-安装包构建完成后会逐个平台上传到同一个 GitHub Release 草稿，仓库所有者可先下载；全部平台完成后自动发布（普通构建为预发布，`v*` 稳定标签为正式发布）。你下载原包上传到镜像后，修改 Next 插件 `apis/updater/index.js` 顶部 `THMR_DOWNLOAD_URLS` 的四个地址，再把 Release 的签名清单放到插件的 `data/`。支持 `thmr-update.json` 和 `thmr-release.json`，后者优先；legacy 使用项目根目录的 `data/updates/`。`/updater/thmr/status` 可检查已验签的版本和故障类型。镜像地址可以单独调整，版本、文件大小与哈希仍经过验签。
-
-CI 自动获取最新 Flutter stable 和 Node.js LTS；同一次构建的四个平台共用解析后的 Flutter SDK。GitHub Actions 跟随最新稳定主版本，Dependabot 每周检查后续主版本升级。Windows 使用 `windows-latest`，Linux 固定 `ubuntu-24.04` 作为兼容基线；macOS 因 arm64 容量不足暂用当前稳定版 Intel 运行器，仓库 Variable `THMR_MACOS_RUNNER` 可覆盖为 `macos-latest`。Java 自动选取当前 Gradle 支持范围内的最新稳定版。
-
-## 构建与发布
-
-`.github/workflows/build.yml` 在各平台系统上构建，并打包完整安装目录：
-
-| 平台 | 产物 |
-| --- | --- |
-| Windows x64 | `thmr-app-windows-x64.zip` |
-| macOS 12+，Intel / Apple Silicon | `thmr-app-macos-universal.dmg`（拖拽安装）；另附 `.zip` 供客户端自更新 |
-| Linux x64 | `thmr-app-linux-x64.tar.gz` |
-| Android | `thmr-app-android.apk` |
-
-普通构建保存在 Actions Artifacts。所有平台完成后发布 Release；稳定版本同时生成签名更新清单，需要按上述步骤部署到自有更新 API。macOS、Linux 的本地构建必须在对应系统进行。
-
-macOS DMG 包含 THMR 应用、Applications 拖拽入口和中英文安装引导背景。先拖入 Applications，再从该目录启动。更新镜像中的 macOS 地址仍填写 ZIP，现有客户端的安装器使用此格式。
-
-Linux Debian/Ubuntu 构建依赖：
-
-```bash
-sudo apt-get install clang cmake ninja-build pkg-config libgtk-3-dev \
-  liblzma-dev g++ libsecret-1-dev libjsoncpp-dev \
-  libayatana-appindicator3-dev libmpv-dev mpv
-```
-
-分发时保留整个 `bundle/`，根目录的 `./thmr` 为统一 CLI，交互终端默认进入 TUI，使用 `./thmr gui` 打开图形界面；可运行 `./install-desktop.sh` 添加当前用户的应用菜单入口。运行系统仍需 libmpv、GTK、libsecret、jsoncpp 和 Ayatana AppIndicator 等运行库；频谱使用内置 minimp3，无需安装 FFmpeg 命令。Linux 已接入托盘、关闭行为设置、MPRIS 系统媒体控制和本应用实时频谱，托盘不可用时回退任务栏最小化。Linux 登录保留网页版入口，本轮不适配客户端登录和迷你播放器；macOS/Linux 使用原生标题栏。完整安装、测试和兼容边界见 [Linux 使用说明](docs/LINUX.md)。
-
-桌面端（Windows / macOS / Linux）每个登录会话只运行一个实例。重复启动会退出新进程并唤起已有窗口；Windows 支持从托盘隐藏或最小化状态恢复，并保留当前的主窗口 / 迷你播放器模式。退出或崩溃后可正常重新启动。
+首次从 0.1.x 升级时先退出旧客户端，重新确认音量、来源和码率；这些旧设置尚未自动迁移到共享宿主。当前开发预览的功能边界和验收要求见[开发说明](docs/DEVELOPMENT.md#支持范围)。
 
 ## 设计语言:「幻想乡放送局」
 
@@ -91,49 +43,27 @@ sudo apt-get install clang cmake ninja-build pkg-config libgtk-3-dev \
 背景:所选角色的插画固定在左下方，页面使用透明底色与半透明渐变遮罩；切换主题时插画平滑过渡。
 品牌元素:logo 的鸟居「T」、阴阳玉「R」、电波弧线被复用为封面 fallback、空状态插画。
 
-## 目录结构
+## 文档
 
-```
-lib/
-├── main.dart                  # MediaKit 初始化 + Riverpod
-├── app.dart                   # MaterialApp + 明暗主题
-├── core/
-│   ├── config.dart            # JSON 资产内置 + --dart-define 覆盖
-│   ├── theme/                 # 设计令牌 + ThemeData 工厂
-│   ├── models/models.dart     # 后端 JSON 模型(ID 全 String)
-│   ├── api/                   # RadioApi / ThmrApi(dio,统一 {error} 解析)
-│   ├── player/                # media_kit 直播流播放器 + 状态机
-│   └── state/                 # 轮询 / 设置 / 认证 / 收藏 providers
-├── shared/widgets/            # 纸面板、插画背景、封面、LIVE 徽标
-└── features/
-    ├── shell/                 # 底部导航 / 宽屏 NavigationRail
-    ├── listen/                # 收听页:正在放送 + 码率 + 队列 + 反馈 + 投票
-    ├── library/               # 曲库搜索(账号后端代理)
-    ├── collections/           # 收藏夹列表 / 详情 / 分享 / 导出
-    └── account/               # 账号 + 主题设置 + 关于
-```
-
-## 已实现(对齐 FLUTTER.md 里程碑)
-
-- **M1 播放器**:状态双定时器轮询(10s + `expectedEndMs` 精准换曲刷新)、media_kit 直连 MP3 流、直播状态机(idle/connecting/online/buffering/reconnecting,重连策略与 Web 端一致)、码率切换(按 station 持久化、播放中热切换)、听众数 / LIVE 徽标
-- **系统媒体控制**:Windows SMTC、Linux MPRIS 与 Android/iOS `audio_service` 同步曲目信息、播放状态和进度；系统播放/暂停键共用直播流状态机，不提供直播流 seek。
-- **M5 反馈**:曲目反馈表单(10 类枚举、联系方式必填、`autoSkipped` 提示)
-- **M4 部分**:切歌投票(阈值来自 `/api/meta`,公开接口可看票数)
-- **M2 账号**:Bearer 会话存取、`/auth/me` 引导、昵称修改与内置 WebView 登录（Linux 除外）
-- **M3 骨架**:收藏夹 CRUD / 曲库搜索加曲 / 收藏 toggle / 默认收藏夹约定(首个 position 最小)/ 409 幂等提示;分享开关已接 `/share`
-
-## 待接入
-
-| 项 | 说明 |
+| 文档 | 内容 |
 | --- | --- |
-| Linux 登录 | 保留网页版入口，本轮不适配；当前后端没有可用于桌面浏览器登录的凭据交付契约 |
-| macOS 桌面扩展 | 托盘、迷你窗口和频谱原生实现待接入 |
-| Linux 迷你播放器 | 本轮明确不适配 |
-| 评论 / 广场 | 等后端 `/api/social/*` 接口落地后再对接(FLUTTER.md 第十章) |
+| [终端客户端](docs/TERMINAL.md) | CLI/TUI 命令、安装目录、设置和升级 |
+| [Linux 客户端](docs/LINUX.md) | 系统依赖、应用菜单和桌面兼容性 |
+| [开发说明](docs/DEVELOPMENT.md) | 架构、源码运行、构建、测试和支持范围 |
+| [后端接口](docs/API.md) | Radio、账号、收藏、反馈和登录约定 |
+| [本机控制协议](protocol/README.md) | GUI/CLI/TUI 与宿主的 HTTP/WebSocket 协议 |
+| [更新与发布](docs/AUTO_UPDATE.md) | 签名、CI、安装器、更新 API 与镜像部署 |
+| [更新记录](CHANGELOG.md) | 各版本面向用户的变更 |
 
-## 平台注意
+## 开发
 
-- Android:`INTERNET` 权限由 Flutter 模板自带;minSdk 默认满足(≥21);全 HTTPS。
-- iOS:已配置 `audio_service` 和 `UIBackgroundModes: audio`；锁屏显示仍需在真机核验。
-- Windows:首次构建需 Visual Studio 2022 桌面 C++ 工作负载。
-- 字体:google_fonts 首次联网拉取 Noto Serif SC;离线发布时将字体文件放入 `assets/google_fonts/`(见 google_fonts 文档)即可免下载。
+安装 Flutter、仓库固定的 Rust 工具链和对应平台的编译依赖后：
+
+```sh
+flutter pub get
+python tool/build_native.py --debug
+```
+
+将 `THMR_CLI_PATH` 设为已构建 `thmr` 的绝对路径，再运行 `flutter run -d windows`（或 `macos` / `linux`）。移动端直接使用 `flutter run -d <设备 ID>`。各平台路径和打包命令见[开发说明](docs/DEVELOPMENT.md)。
+
+安装包由 CI 发布到 Release/Artifacts，不存入源码仓库。

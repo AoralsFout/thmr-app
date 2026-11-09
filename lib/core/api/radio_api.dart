@@ -3,7 +3,7 @@ import 'package:dio/dio.dart';
 import '../config.dart';
 import '../models/models.dart';
 
-/// Radio 后端 — 全部免登录(FLUTTER.md 7.1)。
+/// Radio 后端；请求与凭据约定见 docs/API.md。
 /// 所有 /api/* 响应带 Cache-Control: no-store,不做 HTTP 层缓存。
 class RadioApi {
   RadioApi({RadioApi? debugClient, String? baseUrl})

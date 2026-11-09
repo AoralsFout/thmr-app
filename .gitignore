@@ -4,6 +4,7 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 .idea/
+/.vscode/
 *.iml
 *.log
 # Widget Preview related
@@ -17,3 +18,11 @@ server-plugin/
 # Rust workspace
 /target/
 /thmr-terminal-*
+
+# Distribution artifacts and temporary Flutter screenshots
+/dist/
+/thmr-app-*.zip
+/thmr-app-*.tar.gz
+/thmr-app-*.dmg
+/thmr-app-*.apk
+/flutter_*.png

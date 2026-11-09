@@ -1,47 +1,52 @@
-# THMR 终端客户端（开发预览）
+# THMR 终端客户端
 
-THMR CLI/TUI 与 Flutter 桌面界面共享 `thmrd` 播放宿主。移动端仍由 App 管理音频。
+CLI、TUI 与 Flutter 桌面界面共享 `thmrd` 播放宿主，支持免登录直播、来源、码率、音量和状态查询。
 
-## 安装与启动
+## 安装
 
-解压后保留完整目录，将 `bin` 加入 PATH。Windows 终端包内含与 GUI 相同版本的 `libmpv-2.dll`。Linux 首期采用 Ubuntu 24.04/glibc 2.39 构建基线，需要系统 `libmpv2`，MPRIS 需要用户 D-Bus 会话。macOS 需保留 `THMRHost.app`；首次公开发行需要 Developer ID 签名与公证，未配置时预览包使用本地签名。
+解压后保留完整目录。独立终端包将 `bin` 加入 PATH；完整桌面包的命令位置如下：
 
-首次从 0.1.x 桌面版切换时，先退出旧 GUI，再启动完整新包，并重新确认音量、来源和码率。旧 GUI 的播放参数尚未自动迁移到宿主配置。
+| 平台 | CLI 位置 | 运行要求 |
+| --- | --- | --- |
+| Windows | `thmr.exe` | 保留同目录的 `thmrd.exe` 和 `libmpv-2.dll` |
+| Linux | `bundle/thmr` | Ubuntu 24.04/glibc 2.39 基线，系统提供 `libmpv2`；MPRIS 需要用户 D-Bus 会话 |
+| macOS | `THMR.app/Contents/Helpers/thmr` | 独立终端包需保留 `THMRHost.app`；公开分发需 Developer ID 与公证，预览包可采用本地签名 |
+
+Linux 完整包可直接运行 `./thmr`，或将 `bundle` 的绝对路径加入 PATH。`thmr gui` 通过 `thmr-gui` 检查运行库并打开图形界面；应用菜单使用相同命令。
+
+## 命令
 
 ```text
-thmr                   交互终端进入 TUI
-thmr play              后台收听
-thmr pause             暂停并停止拉流
-thmr stop              停止收听
-thmr volume 35         修改 THMR 音量
-thmr source auto       自动选择来源，也可用 source1/source2
-thmr quality 128k      选择状态接口公开的码率
-thmr status --json     查询确认状态，不自动启动宿主
+thmr                   交互终端进入 TUI，或使用 defaultUi 设置
+thmr tui               打开终端界面
 thmr gui               打开已安装的兼容 Flutter 界面
+thmr play              后台收听，必要时启动宿主
+thmr pause             暂停并停止拉流
+thmr stop              停止收听，保留宿主
+thmr toggle            切换播放/暂停
+thmr volume 35         修改 THMR 音量，范围 0–100
+thmr source auto       自动选择来源，也可用 source1/source2
+thmr quality 128k      选择状态接口公开的启用码率
+thmr status --json     查询状态，不自动启动宿主
+thmr refresh           刷新曲目信息
 thmr doctor            检查安装与音频依赖
-thmr daemon stop       关闭宿主
+thmr paths --json      查看运行与配置目录
+thmr daemon start      启动宿主
+thmr daemon stop       停止播放并关闭宿主
 ```
 
-TUI：空格播放/暂停，`+/-` 调音量，`1/2/a` 选择来源，`b` 切码率，`r` 刷新，`s` 停止，`q` 离开界面并保留后台播放。直播不能点播、seek 或本地跳歌，恢复时连接当前广播位置。
+无参数启动需要交互终端；脚本中应显式指定子命令。完整参数见 `thmr --help`。
 
-GUI 选择“退出程序”或托盘菜单“退出”会停止播放并关闭共享宿主；最小化到托盘/任务栏继续播放。TUI 的 `q` 仍保留后台播放。
+TUI：空格播放/暂停，`+/-` 调音量，`1/2/a` 选择来源，`b` 切码率，`r` 刷新，`s` 停止，`q` 离开界面并保留后台播放。直播不支持点播、seek 或本地跳歌，恢复播放时连接当前广播位置。
 
-完整 Linux 包根目录的 `thmr` 为统一 CLI；将 `bundle/` 的绝对路径加入 PATH，或直接运行 `./thmr`。`./thmr gui` 打开图形界面，应用菜单也使用此命令；GUI 运行库检查脚本保留为 `thmr-gui`。独立终端包仍将 `bin` 加入 PATH。macOS 完整包中的命令位于 `THMR.app/Contents/Helpers`，避免与 GUI 的 `THMR` 文件名冲突。独立终端包可用 `THMR_GUI_PATH` 或设置文件中的 `guiPath` 指定已安装 GUI。
+GUI 明确退出会停止播放并关闭宿主；最小化到托盘/任务栏继续播放。
 
-## 开发构建
+## 设置与升级
 
-安装仓库 `rust-toolchain.toml` 固定的 Rust 和 Flutter SDK。运行 `python tool/build_native.py` 构建本机桌面程序；macOS 同时构建 Intel 和 Apple Silicon，Windows 使用 MSVC 目标。
+`thmr paths` 显示用户目录，偏好保存在配置目录的 `settings.toml`。例如 `defaultUi = "gui"` 可调整交互终端无参数启动的默认界面。GUI 主题与窗口设置仍由图形客户端保存。
 
-`flutter build windows --release`（或 linux/macos）之后，运行 `python tool/package_desktop.py --platform windows --bundle build/windows/x64/runner/Release`；对应平台路径由 CI 展示。macOS 的 helpers 必须在应用签名之前加入，终端应用另外签名、公证后归档。
+独立终端包可用 `THMR_GUI_PATH` 或设置中的 `guiPath` 指定兼容 GUI。开发用环境变量与构建步骤见源码仓库的 `docs/DEVELOPMENT.md`。
 
-Actions 的 `Build Clients` 手动构建提供 `platform` 选项：`all` 构建全部，或选择 `windows`、`linux`、`macos`、`android`。单平台构建仅上传预览附件，不创建或发布 Release；分析和通用测试仍会运行。
+升级前执行 `thmr daemon stop` 并关闭 TUI。完整桌面包使用 GUI 自更新；独立终端包当前手动替换完整目录。首次从 0.1.x 桌面版切换时先退出旧 GUI，重新确认音量、来源和码率；旧播放设置尚未自动迁移。
 
-源码直接运行 Flutter 时，`THMR_CLI_PATH` 可指向已构建 `thmr`。需要验证旧的应用内播放器时，用 `--dart-define=THMR_LOCAL_PLAYER=true`；正式统一桌面包默认连接宿主。
-
-`THMR_RUNTIME_DIR` 和 `THMR_CONFIG_DIR` 可指定隔离的用户目录；`THMR_MPV_LIBRARY` 可指定开发用音频库。会话凭据不会写入命令行输出。自动测速只读取有界的公开音频样本，不读取或发送凭据；受限来源会报告测速失败。
-
-## 更新与支持范围
-
-GUI 自更新负责完整桌面包；终端包当前手动替换完整目录，包管理器安装将由包管理器更新。升级前执行 `thmr daemon stop`，关闭该安装中的 TUI。偏好保存在用户配置目录，不放在程序目录。
-
-当前不包含账号登录桥接、收藏操作或跨设备遥控。daemon 模式下 Linux 的旧 MP3 流频谱尚未迁移，界面保持静态，避免再拉第二路远端音频；Windows 保留现有系统输出频谱。平台原生媒体键和 macOS 打包后的实际行为以 CI/人工验收记录为准。
+终端账号授权、收藏操作和跨设备遥控尚未实现。Linux 共享宿主模式的频谱保持静态；Windows 保留系统输出频谱。其他平台限制和验收要求见源码仓库的 `docs/DEVELOPMENT.md`。

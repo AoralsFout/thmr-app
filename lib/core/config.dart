@@ -1,4 +1,4 @@
-/// 运行配置:与 Web 端 dist/config.js 同值,`--dart-define` 可覆盖。
+/// Flutter 后端配置，通过 `--dart-define` 覆盖；桌面播放设置由宿主管理。
 class AppConfig {
   const AppConfig({
     this.radioBaseUrl = defaultRadioBaseUrl,
@@ -21,7 +21,7 @@ class AppConfig {
   /// 频道 ID(Web 端 window.RADIO_PUBLIC_CONFIG.stationId)
   final String stationId;
 
-  /// streamAuth 启用时的访问密钥(与 Web 端 dist/config.js token 同值)
+  /// 应用内播放路径在 streamAuth 启用时使用的访问密钥。
   final String streamToken;
 
   /// 功能开关:投票切歌(Web 端 features.vote,当前隐藏禁用)

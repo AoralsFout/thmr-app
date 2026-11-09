@@ -65,7 +65,7 @@ class StationUiState {
   }
 }
 
-/// 双定时器轮询(FLUTTER.md 4.3):
+/// 应用内播放路径的双定时器轮询：
 /// 常规 10s 一次;拿到 expectedEndMs 后在换曲时刻 +800ms 精准再刷。
 class StationPoller extends StateNotifier<StationUiState> {
   StationPoller.remote(DesktopSession session)
