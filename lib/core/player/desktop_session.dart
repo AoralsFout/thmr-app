@@ -27,8 +27,11 @@ class DesktopSession {
   int _epoch = 0;
 
   static Future<DesktopSession> open() async {
-    final sibling = p.join(p.dirname(Platform.resolvedExecutable),
-        Platform.isWindows ? 'thmr.exe' : 'thmr');
+    final sibling = p.joinAll([
+      p.dirname(Platform.resolvedExecutable),
+      if (Platform.isLinux) 'bin',
+      Platform.isWindows ? 'thmr.exe' : 'thmr'
+    ]);
     final executable = Platform.environment['THMR_CLI_PATH'] ?? sibling;
     if (!await File(executable).exists()) {
       throw const FileSystemException('未找到播放程序，请安装完整 THMR 客户端。');
@@ -131,6 +134,24 @@ class DesktopSession {
         await _request(await _endpoint(), {'command': command, ...fields});
     _accept(result);
     return result;
+  }
+
+  /// Called only once an update helper has staged and accepted the new package.
+  Future<void> prepareForUpdate() async {
+    final instance = snapshot['instanceId'];
+    await execute('prepare_update');
+    for (var attempt = 0; attempt < 60; attempt++) {
+      if (!await _instanceFile.exists()) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        return;
+      }
+      final endpoint = await _endpoint();
+      if (endpoint['instanceId'] != instance) {
+        throw StateError('播放进程已变更，请稍后重试更新。');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    throw StateError('播放进程未能退出，已取消安装。');
   }
 
   Future<void> _connect() async {

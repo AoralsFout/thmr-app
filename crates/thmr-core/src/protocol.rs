@@ -21,6 +21,7 @@ pub enum Command {
     Refresh,
     TestSources,
     Shutdown,
+    PrepareUpdate,
 }
 
 impl<'de> Deserialize<'de> for Command {
@@ -61,6 +62,7 @@ impl<'de> Deserialize<'de> for Command {
             "refresh" => Self::Refresh,
             "test_sources" => Self::TestSources,
             "shutdown" => Self::Shutdown,
+            "prepare_update" => Self::PrepareUpdate,
             "set_volume" => Self::SetVolume {
                 value: object
                     .get("value")
@@ -127,6 +129,7 @@ pub struct Snapshot {
     pub metadata_error: Option<String>,
     pub source_testing: bool,
     pub source_measurements: Vec<Value>,
+    pub shutdown_reason: Option<String>,
     pub capabilities: Capabilities,
 }
 
@@ -152,6 +155,7 @@ impl Snapshot {
             metadata_error: None,
             source_testing: false,
             source_measurements: Vec::new(),
+            shutdown_reason: None,
             capabilities: Capabilities {
                 seek: false,
                 next: false,

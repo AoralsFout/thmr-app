@@ -61,6 +61,7 @@ enum Action {
 enum DaemonAction {
     Start,
     Stop,
+    PrepareUpdate,
 }
 #[tokio::main]
 async fn main() {
@@ -127,6 +128,9 @@ async fn run() -> Result<()> {
                 Action::Daemon {
                     command: DaemonAction::Stop,
                 } => Command::Shutdown,
+                Action::Daemon {
+                    command: DaemonAction::PrepareUpdate,
+                } => Command::PrepareUpdate,
                 _ => unreachable!(),
             };
             let client = if matches!(command, Command::Play | Command::Toggle) {
@@ -180,6 +184,7 @@ async fn open_gui() -> Result<()> {
         paths.push(dir.join("THMR"));
         paths.push("/Applications/THMR.app/Contents/MacOS/THMR".into());
     } else {
+        paths.push(dir.join("../thmr"));
         paths.push(dir.join("thmr_app"));
     }
     let gui = paths.into_iter().find(|p| p.is_file()).context(
@@ -213,8 +218,7 @@ async fn doctor() -> Result<()> {
         }
         Err(e) => println!("Host: {e}"),
     }
-    let daemon =
-        std::env::current_exe()?.with_file_name(if cfg!(windows) { "thmrd.exe" } else { "thmrd" });
+    let daemon = thmr_core::client::daemon_path()?;
     if !Process::new(daemon)
         .arg("--check")
         .status()

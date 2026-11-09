@@ -44,8 +44,8 @@ impl Host {
             return media.run(updates, done);
         }
         while !done.load(Ordering::Acquire) {
+            #[cfg(not(target_os = "macos"))]
             if let Some(media) = &mut self.platform {
-                #[cfg(not(target_os = "macos"))]
                 media.pump();
             }
             if let Ok(mut snapshot) = updates.recv_timeout(std::time::Duration::from_millis(50)) {

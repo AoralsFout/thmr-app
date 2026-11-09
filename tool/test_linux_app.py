@@ -207,6 +207,8 @@ def exercise(bundle):
                        GTK_USE_PORTAL='0', XDG_CURRENT_DESKTOP='THMRTest',
                        GDK_BACKEND='x11', XDG_SESSION_TYPE='x11')
             env.pop('WAYLAND_DISPLAY', None)
+            env['THMR_RUNTIME_DIR'] = str(root / 'host-runtime')
+            env['THMR_CONFIG_DIR'] = str(root / 'host-config')
             for key, folder in [('XDG_CONFIG_HOME', 'config'), ('XDG_DATA_HOME', 'data'),
                                 ('XDG_CACHE_HOME', 'cache'), ('TMPDIR', 'tmp')]:
                 env[key] = str(root / folder)
@@ -253,6 +255,10 @@ def exercise(bundle):
                     print(log.read(), file=sys.stderr)
                     raise
                 finally:
+                    native = bundle / 'bin/thmr'
+                    if native.exists():
+                        subprocess.run([str(native), 'daemon', 'stop'], env=env,
+                                       stdout=log, stderr=log, timeout=10)
                     if app.poll() is None:
                         app.terminate()
                         try:

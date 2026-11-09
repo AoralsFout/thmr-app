@@ -33,6 +33,38 @@ else
   python3 tool/macos_app.py sign "$app"
 fi
 
+
+# Stage a Flutter-free host application from the same signed audio frameworks.
+python3 tool/package_desktop.py --platform macos --bundle "$app" --terminal-only --stage-only
+host=build/terminal/macos/THMRHost.app
+cli=build/terminal/macos/bin/thmr
+if [ -n "${MACOS_CERTIFICATE_BASE64:-}" ]; then
+  python3 - "$host" "$MACOS_CODESIGN_IDENTITY" "$keychain" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, 'tool')
+from macos_app import sign_app
+sign_app(Path(sys.argv[1]), sys.argv[2], sys.argv[3])
+PY
+  codesign --force --options runtime --timestamp --sign "$MACOS_CODESIGN_IDENTITY" --keychain "$keychain" "$cli"
+  ditto -c -k --sequesterRsrc --keepParent build/terminal/macos "$RUNNER_TEMP/thmr-terminal-notarize.zip"
+  xcrun notarytool submit "$RUNNER_TEMP/thmr-terminal-notarize.zip" --wait \
+    --key "$RUNNER_TEMP/thmr-apple-api.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID"
+  xcrun stapler staple "$host"
+else
+  python3 - "$host" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, 'tool')
+from macos_app import sign_app
+sign_app(Path(sys.argv[1]))
+PY
+  codesign --force --timestamp=none --sign - "$cli"
+fi
+codesign --verify --deep --strict "$host"
+python3 tool/package_desktop.py --platform macos --archive-only
+THMR_NO_SYSTEM_MEDIA=1 python3 tool/test_unified_host.py --bin-dir "$app/Contents/MacOS"
+
 # Both distributions come from the same app, after signing and stapling.
 ditto -c -k --sequesterRsrc --keepParent "$app" thmr-app-macos-universal.zip
 python3 tool/verify_macos_zip.py thmr-app-macos-universal.zip

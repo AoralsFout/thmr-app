@@ -10,7 +10,7 @@ on:
         type: string
   pull_request:
   push:
-    branches: [main]
+    branches: [main, codex/unified-cli-tui-gui]
     tags: ['v*']
 
 permissions:
@@ -54,7 +54,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: node tool/update_release.cjs notes --version "$RELEASE_VERSION"
       - name: Require a pinned update key for official releases
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.repository == 'Yunmoan/thmr-app' && startsWith(github.ref, 'refs/tags/v')
         run: node -e 'if(Buffer.from(process.env.UPDATE_PUBLIC_KEY || "", "base64").length !== 32) throw new Error("Configure repository variable THMR_UPDATE_PUBLIC_KEY before tagging a release")'
       - run: flutter pub get
       - run: flutter analyze
@@ -67,10 +67,10 @@ jobs:
       contents: write
     steps:
       - name: Keep pull request packages in Actions only
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.repository != 'Yunmoan/thmr-app' || (github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v'))
         run: echo 'Pull requests do not publish Releases.'
       - name: Prepare the release draft
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.repository == 'Yunmoan/thmr-app' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
@@ -119,6 +119,8 @@ jobs:
       - run: flutter test --no-pub
       - run: python3 tool/test_linux_mpris.py
       - run: python3 -m unittest discover -s tool -p test_linux_distribution.py
+      - name: Build version-matched native programs
+        run: python tool/build_native.py --version ${{ needs.validate.outputs.version }} --build-number ${{ needs.validate.outputs.build_number }}
       - run: >-
           flutter build linux --release
           --build-name=${{ needs.validate.outputs.version }}
@@ -126,6 +128,8 @@ jobs:
           --dart-define=THMR_CLIENT_VERSION=${{ needs.validate.outputs.version }}
           --dart-define=THMR_UPDATE_API_URL=${{ env.UPDATE_API_URL }}
           --dart-define=THMR_UPDATE_PUBLIC_KEY=${{ env.UPDATE_PUBLIC_KEY }}
+      - name: Bundle native programs and terminal distribution
+        run: python tool/package_desktop.py --platform linux --bundle build/linux/x64/release/bundle
       - name: Validate Linux runtime and desktop integration
         run: |
           python3 tool/verify_linux_bundle.py build/linux/x64/release/bundle --max-glibc 2.39
@@ -146,16 +150,18 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: thmr-app-linux
-          path: thmr-app-linux-x64.tar.gz
+          path: |
+            thmr-app-linux-x64.tar.gz
+            thmr-terminal-linux-x64.tar.gz
           if-no-files-found: error
           overwrite: true
       - name: Upload Linux package to the release draft
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.repository == 'Yunmoan/thmr-app' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
-        run: gh release upload "$RELEASE_TAG" thmr-app-linux-x64.tar.gz --clobber
+        run: gh release upload "$RELEASE_TAG" thmr-app-linux-x64.tar.gz thmr-terminal-linux-x64.tar.gz --clobber
 
   macos:
     needs: [validate, prepare_release]
@@ -171,6 +177,8 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      - name: Build version-matched native programs
+        run: python tool/build_native.py --version ${{ needs.validate.outputs.version }} --build-number ${{ needs.validate.outputs.build_number }}
       - run: >-
           flutter build macos --release
           --build-name=${{ needs.validate.outputs.macos_version }}
@@ -178,6 +186,8 @@ jobs:
           --dart-define=THMR_CLIENT_VERSION=${{ needs.validate.outputs.version }}
           --dart-define=THMR_UPDATE_API_URL=${{ env.UPDATE_API_URL }}
           --dart-define=THMR_UPDATE_PUBLIC_KEY=${{ env.UPDATE_PUBLIC_KEY }}
+      - name: Bundle native programs and terminal distribution
+        run: python tool/package_desktop.py --platform macos --bundle build/macos/Build/Products/Release/THMR.app --stage-only
       - name: Check the universal app identity before distribution signing
         env:
           CLIENT_VERSION: ${{ needs.validate.outputs.macos_version }}
@@ -206,15 +216,16 @@ jobs:
           path: |
             thmr-app-macos-universal.dmg
             thmr-app-macos-universal.zip
+            thmr-terminal-macos-universal.tar.gz
           if-no-files-found: error
           overwrite: true
       - name: Upload macOS packages to the release draft
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.repository == 'Yunmoan/thmr-app' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
-        run: gh release upload "$RELEASE_TAG" thmr-app-macos-universal.dmg thmr-app-macos-universal.zip --clobber
+        run: gh release upload "$RELEASE_TAG" thmr-app-macos-universal.dmg thmr-app-macos-universal.zip thmr-terminal-macos-universal.tar.gz --clobber
 
   windows:
     needs: [validate, prepare_release]
@@ -232,6 +243,8 @@ jobs:
       - name: Fix legacy Windows plugin build scripts
         run: python tool/patch_windows_plugins.py
       - run: python -m unittest discover -s tool -p 'test_update_helpers.py' -v
+      - name: Build version-matched native programs
+        run: python tool/build_native.py --version ${{ needs.validate.outputs.version }} --build-number ${{ needs.validate.outputs.build_number }}
       - run: >-
           flutter build windows --release
           --build-name=${{ needs.validate.outputs.version }}
@@ -239,6 +252,10 @@ jobs:
           --dart-define=THMR_CLIENT_VERSION=${{ needs.validate.outputs.version }}
           --dart-define=THMR_UPDATE_API_URL=${{ env.UPDATE_API_URL }}
           --dart-define=THMR_UPDATE_PUBLIC_KEY=${{ env.UPDATE_PUBLIC_KEY }}
+      - name: Bundle native programs and terminal distribution
+        run: python tool/package_desktop.py --platform windows --bundle build/windows/x64/runner/Release
+      - name: Validate bundled playback host
+        run: python tool/test_unified_host.py --bin-dir build/windows/x64/runner/Release
       - name: Pack the complete bundle
         shell: pwsh
         env:
@@ -251,16 +268,18 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: thmr-app-windows
-          path: thmr-app-windows-x64.zip
+          path: |
+            thmr-app-windows-x64.zip
+            thmr-terminal-windows-x64.zip
           if-no-files-found: error
           overwrite: true
       - name: Upload Windows package to the release draft
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.repository == 'Yunmoan/thmr-app' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
-        run: gh release upload $env:RELEASE_TAG thmr-app-windows-x64.zip --clobber
+        run: gh release upload $env:RELEASE_TAG thmr-app-windows-x64.zip thmr-terminal-windows-x64.zip --clobber
 
   android:
     needs: [validate, prepare_release]
@@ -326,7 +345,7 @@ jobs:
           if-no-files-found: error
           overwrite: true
       - name: Upload Android package to the release draft
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.repository == 'Yunmoan/thmr-app' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -334,7 +353,7 @@ jobs:
         run: gh release upload "$RELEASE_TAG" thmr-app-android.apk --clobber
 
   release:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.repository == 'Yunmoan/thmr-app' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [validate, linux, macos, windows, android]
     runs-on: ubuntu-latest
     permissions:
@@ -355,7 +374,7 @@ jobs:
         working-directory: release
         run: |
           mkdir -p metadata
-          sha256sum thmr-app-* > metadata/SHA256SUMS
+          sha256sum thmr-* > metadata/SHA256SUMS
       - name: Prepare the release notes for GitHub and the update API
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
@@ -384,7 +403,7 @@ jobs:
           RELEASE_BUILD: ${{ needs.validate.outputs.build_number }}
           RELEASE_PREVIEW: ${{ needs.validate.outputs.prerelease }}
         run: |
-          gh release upload "$RELEASE_TAG" release/thmr-app-* release/metadata/* --clobber
+          gh release upload "$RELEASE_TAG" release/thmr-* release/metadata/* --clobber
           python3 - <<'PY'
           import json, os, subprocess
           from pathlib import Path

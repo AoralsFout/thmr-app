@@ -97,7 +97,7 @@ impl Session {
                     self.reconnect(error.to_string());
                 }
             }
-            Command::Pause | Command::Stop | Command::Shutdown => {
+            Command::Pause | Command::Stop | Command::Shutdown | Command::PrepareUpdate => {
                 self.wanted = false;
                 self.retry = None;
                 self.connecting_since = None;
@@ -105,6 +105,11 @@ impl Session {
                 self.state.user_paused = command == Command::Pause;
                 self.state.phase = Phase::Idle;
                 self.state.error = None;
+                self.state.shutdown_reason = if command == Command::PrepareUpdate {
+                    Some("update".into())
+                } else {
+                    None
+                };
                 self.player.stop()?;
                 if command == Command::Stop {
                     self.state.listened_sec = 0;
@@ -270,7 +275,7 @@ pub async fn run(
             envelope = commands.recv() => {
                 let Some(envelope) = envelope else { break; };
                 let command = envelope.request.command;
-                shutdown = command == Command::Shutdown;
+                shutdown = matches!(command, Command::Shutdown | Command::PrepareUpdate);
                 let refresh = matches!(command, Command::Refresh | Command::SetSource { .. });
                 let source_change = matches!(&command, Command::SetSource { .. });
                 let probe = matches!(&command, Command::TestSources) || matches!(&command, Command::SetSource { source } if source == "auto");
@@ -337,6 +342,10 @@ pub async fn run(
             _ = tokio::signal::ctrl_c() => { let _ = session.execute(Command::Shutdown); shutdown = true; }
         }
         if shutdown {
+            if session.state.shutdown_reason.as_deref() == Some("update") {
+                // Let subscribed terminal frontends restore their terminals and exit.
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
             break;
         }
         if probe_requested && probe_task.as_ref().is_none_or(|t| t.is_finished()) {

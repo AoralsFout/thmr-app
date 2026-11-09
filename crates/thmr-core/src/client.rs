@@ -80,14 +80,7 @@ impl Client {
             // A version mismatch is actionable: never silently start a second player.
             Endpoint::read(&runtime::runtime_dir()?)?;
         }
-        let exe = std::env::current_exe()?;
-        let daemon = exe
-            .parent()
-            .context("cannot locate THMR installation")?
-            .join(if cfg!(windows) { "thmrd.exe" } else { "thmrd" });
-        if !daemon.is_file() {
-            bail!("thmrd not found beside thmr; install the complete terminal package");
-        }
+        let daemon = daemon_path()?;
         spawn_detached(&daemon, &[])?;
         for _ in 0..100 {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -97,6 +90,19 @@ impl Client {
         }
         bail!("THMR host did not become ready; run thmrd in a terminal or thmr doctor for diagnostics")
     }
+}
+
+pub fn daemon_path() -> Result<std::path::PathBuf> {
+    let exe = std::env::current_exe()?;
+    let dir = exe.parent().context("cannot locate THMR installation")?;
+    let mut candidates = vec![dir.join(if cfg!(windows) { "thmrd.exe" } else { "thmrd" })];
+    if cfg!(target_os = "macos") {
+        candidates.push(dir.join("../THMRHost.app/Contents/MacOS/thmrd"));
+    }
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .context("thmrd not found; install the complete terminal package")
 }
 
 pub fn spawn_detached(path: &Path, args: &[&str]) -> Result<()> {

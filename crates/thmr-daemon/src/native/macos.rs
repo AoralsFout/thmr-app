@@ -52,17 +52,13 @@ impl Media {
             bindings.push((native, token));
         }
         unsafe {
-            for command in [
-                center.nextTrackCommand(),
-                center.previousTrackCommand(),
-                center.changePlaybackPositionCommand(),
-                center.skipForwardCommand(),
-                center.skipBackwardCommand(),
-                center.seekForwardCommand(),
-                center.seekBackwardCommand(),
-            ] {
-                command.setEnabled(false);
-            }
+            center.nextTrackCommand().setEnabled(false);
+            center.previousTrackCommand().setEnabled(false);
+            center.changePlaybackPositionCommand().setEnabled(false);
+            center.skipForwardCommand().setEnabled(false);
+            center.skipBackwardCommand().setEnabled(false);
+            center.seekForwardCommand().setEnabled(false);
+            center.seekBackwardCommand().setEnabled(false);
             MPNowPlayingInfoCenter::defaultCenter()
                 .setPlaybackState(MPNowPlayingPlaybackState::Stopped);
         }

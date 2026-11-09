@@ -55,6 +55,15 @@ pub async fn run(client: Client) -> Result<()> {
         let mut terminal = ratatui::try_init()?;
         let _restore = Restore;
         loop {
+            if input_view
+                .lock()
+                .unwrap()
+                .state
+                .as_ref()
+                .is_some_and(|s| s.shutdown_reason.as_deref() == Some("update"))
+            {
+                break;
+            }
             terminal.draw(|frame| draw(frame, &input_view.lock().unwrap()))?;
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {

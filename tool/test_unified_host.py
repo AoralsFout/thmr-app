@@ -140,7 +140,7 @@ def main():
             wait_for(lambda: state()['phase'] == 'online')
             command('stop')
             wait_for(lambda: active == 0)
-            command('daemon', 'stop')
+            command('daemon', 'prepare-update')
             process.wait(timeout=10)
             assert process.returncode == 0
             assert not (temp / 'runtime/instance.json').exists()

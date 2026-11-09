@@ -37,8 +37,15 @@ def verify(bundle, max_glibc=None):
     decoder = ctypes.CDLL(str((bundle / 'lib/libthmr_mp3.so').resolve()))
     for symbol in ['thmr_mp3_create', 'thmr_mp3_decode', 'thmr_mp3_destroy']:
         getattr(decoder, symbol)
+    native = []
+    if (bundle / 'native-version.json').exists():
+        native = [bundle / 'bin/thmr', bundle / 'bin/thmrd']
+        for binary in native:
+            if not binary.is_file() or not os.access(binary, os.X_OK):
+                raise ValueError(f'Missing native program: {binary.name}')
+            subprocess.run([str(binary), '--version'], check=True)
     observed = set()
-    for binary in [bundle / 'thmr_app', bundle / 'thmr_runtime_check',
+    for binary in [bundle / 'thmr_app', bundle / 'thmr_runtime_check', *native,
                    *sorted((bundle / 'lib').glob('*.so'))]:
         versions = subprocess.check_output(['readelf', '--version-info',
                                            str(binary)], text=True)

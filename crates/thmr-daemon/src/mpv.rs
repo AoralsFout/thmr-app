@@ -58,6 +58,7 @@ impl Mpv {
             vec![dir.join("libmpv-2.dll"), dir.join("mpv-2.dll")]
         } else if cfg!(target_os = "macos") {
             vec![
+                dir.join("../Frameworks/Mpv.framework/Mpv"),
                 dir.join("../Frameworks/libmpv.framework/libmpv"),
                 dir.join("../Frameworks/libmpv.2.dylib"),
                 dir.join("libmpv.2.dylib"),
@@ -66,6 +67,7 @@ impl Mpv {
             ]
         } else {
             vec![
+                dir.join("../lib/libmpv.so.2"),
                 dir.join("lib/libmpv.so.2"),
                 "libmpv.so.2".into(),
                 "libmpv.so.1".into(),

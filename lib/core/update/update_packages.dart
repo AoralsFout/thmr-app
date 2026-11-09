@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import '../platform/windows_process_exit.dart';
 import '../platform/windows_update_process.dart';
 import 'update_manifest.dart';
+import '../player/desktop_session.dart';
 
 Future<Directory> updateCacheDirectory() async => Directory(p.join(
     (Platform.isLinux
@@ -318,6 +319,7 @@ class UpdatePackageManager {
         if (await File(ready).exists() &&
             await File(ready).readAsString() == token) {
           helperStarted = true;
+          await DesktopSession.current?.prepareForUpdate();
           await _quit();
           return;
         }
@@ -402,6 +404,7 @@ class UpdatePackageManager {
         for (var i = 0; i < 1200; i++) {
           if (await ready.exists() && await ready.readAsString() == token) {
             started = true;
+            await DesktopSession.current?.prepareForUpdate();
             await _quit();
             return;
           }
