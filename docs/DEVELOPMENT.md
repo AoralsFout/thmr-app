@@ -90,11 +90,26 @@ python tool/build_native.py --debug
 例如 Windows PowerShell：
 
 ```powershell
+python tool/patch_windows_plugins.py
 $env:THMR_CLI_PATH = "$PWD/target/x86_64-pc-windows-msvc/debug/thmr.exe"
 flutter run -d windows
 ```
 
 Windows 原生构建会从 `flutter pub get` 解析到的音频插件读取 libmpv 下载地址与校验值，自动下载或复用已校验的缓存，将 `libmpv-2.dll` 放到对应 debug/release EXE 旁边，并执行 `thmrd --check` 验证。无需先构建 Flutter GUI 或手动复制 DLL；首次需要联网，直链失败时通过 GitHub 官方 Release API 获取同一资产并继续校验。解包使用 PATH 中的 CMake 或 Windows 自带的 `tar.exe`。
+
+Windows 工作区若带有 Low 完整性标签，构建产物会继承该标签。生成的 EXE 以 Low 级别运行，即使当前用户拥有文件的完全控制权限，也不能写入普通用户的 AppData。这可能表现为 `ring`/`dart-sys` 编译时 MSVC 报 `D8050`、Flutter DevFS 创建临时目录被拒绝，或宿主无法创建 `instance.lock`。机制见 [Windows 完整性控制](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)。
+
+在项目根目录的普通桌面 PowerShell 中，将构建目录及已有产物恢复为 Medium，并让后续产物继承该级别：
+
+```powershell
+foreach ($artifactDir in @('target', 'build')) {
+    New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
+    icacls $artifactDir /setintegritylevel '(OI)(CI)M' /T /L /Q
+    if ($LASTEXITCODE -ne 0) { throw "无法修正 $artifactDir 的完整性标签" }
+}
+```
+
+然后重新构建并重启客户端、宿主。只修改最终 EXE 不够，Cargo 构建脚本也需要正常标签。可用 `icacls target/x86_64-pc-windows-msvc/debug/thmrd.exe` 检查是否为 Medium；若 `flutter clean` 删除了构建目录，或工具重新赋予 Low 标签，应在构建前再次执行上述步骤。
 
 移动端使用 `flutter run -d <设备 ID>`。Linux/macOS 本地宿主还需系统可用的 libmpv；自定义开发库可通过 `THMR_MPV_LIBRARY` 指定。
 
@@ -122,7 +137,7 @@ Flutter 后端地址等构建参数见[后端接口](API.md#配置)，更新参�
 
 Windows 压缩完整的 `Release` 目录；Linux 保留完整 `bundle`；macOS 加入 helpers 后再运行 `bash tool/macos_distribution.sh` 签名并生成 DMG、ZIP 和终端包。macOS 构建包含 Intel 与 Apple Silicon 两种架构。
 
-Android 使用 `python tool/patch_android_plugin.py` 适配当前 WebView 插件，再执行 `flutter build apk --release`。Windows 的插件构建补丁由 CMake 调用；这些兼容补丁仍被 CI 和当前依赖使用。
+Android 使用 `python tool/patch_android_plugin.py` 适配当前 WebView 插件，再执行 `flutter build apk --release`。Windows 构建前运行 `python tool/patch_windows_plugins.py`；CI 同样执行这些已有的插件兼容补丁。
 
 `pubspec.yaml` 是客户端版本与本地构建号的来源，Rust 在构建时读取它。CI 通过 `tool/resolve_version.py` 为各端解析同一版本，构建号为 `run number × 100 + run attempt`。显式覆盖版本时，需同时向 `build_native.py` 传 `--version`/`--build-number`，向 Flutter 传匹配的 `--build-name`/`--build-number` 与 `THMR_CLIENT_VERSION`。
 

@@ -6,6 +6,12 @@ project(thmr_app LANGUAGES CXX)
 # the on-disk name of your application.
 set(BINARY_NAME "thmr_app")
 
+# Subdirectories record install destinations when they are added. Set the
+# bundle prefix first so a fresh configure cannot capture Program Files.
+set(BUILD_BUNDLE_DIR "$<TARGET_FILE_DIR:${BINARY_NAME}>")
+set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
+set(CMAKE_VS_INCLUDE_INSTALL_TO_DEFAULT_BUILD 1)
+
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
 cmake_policy(VERSION 3.14...3.25)
@@ -70,13 +76,6 @@ endif()
 # Support files are copied into place next to the executable, so that it can
 # run in place. This is done instead of making a separate bundle (as on Linux)
 # so that building and running from within Visual Studio will work.
-set(BUILD_BUNDLE_DIR "$<TARGET_FILE_DIR:${BINARY_NAME}>")
-# Make the "install" step default, as it's required to run.
-set(CMAKE_VS_INCLUDE_INSTALL_TO_DEFAULT_BUILD 1)
-# NOTE: 无条件 FORCE — 部分 MSVC 定制版 CMake(3.31.6-msvc)上
-# CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT 不会置真,前缀会落到 Program Files。
-set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
-
 set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
@@ -96,10 +95,11 @@ if(PLUGIN_BUNDLED_LIBRARIES)
 endif()
 
 # Copy the native assets provided by the build.dart from all packages.
+# Flutter can omit this directory when there are no bundled native assets.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"
    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
-   COMPONENT Runtime)
+   COMPONENT Runtime OPTIONAL)
 
 # Fully re-copy the assets directory on each build to avoid having stale files
 # from a previous install.
