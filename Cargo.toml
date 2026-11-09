@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/thmr-core", "crates/thmr-daemon", "crates/thmr-cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.6"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+thmr-core = { path = "crates/thmr-core" }
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"

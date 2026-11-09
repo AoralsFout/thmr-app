@@ -1,0 +1,38 @@
+[package]
+name = "thmr-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "thmrd"
+path = "src/main.rs"
+
+[dependencies]
+thmr-core.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+libloading = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", features = ["Foundation", "Media", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_WinRT", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "=5.15.0", features = ["blocking-api"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-app-kit = "0.3.2"
+objc2-foundation = { version = "0.3.2", features = ["block2"] }
+objc2-media-player = { version = "0.3.2", features = ["block2"] }
+
+[dev-dependencies]
+tempfile = "3"

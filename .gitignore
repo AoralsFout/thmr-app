@@ -14,3 +14,5 @@ node_modules/
 *.private.pem
 
 server-plugin/
+# Rust workspace
+/target/
