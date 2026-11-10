@@ -18,6 +18,7 @@ const CYAN: Color = Color::Rgb(131, 227, 219);
 const VIOLET: Color = Color::Rgb(193, 162, 238);
 const BRIGHT: Color = Color::Rgb(245, 251, 255);
 const ERROR: Color = Color::Rgb(255, 164, 168);
+const FOOTER_SIDE_BY_SIDE_WIDTH: u16 = 100;
 
 fn style(color: Color) -> Style {
     Style::new().fg(color).bg(BG)
@@ -92,10 +93,15 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
         compact(frame, ui, state, area, connection);
         return;
     }
+    let footer_height = if area.width >= FOOTER_SIDE_BY_SIDE_WIDTH {
+        6
+    } else {
+        5 + area.height.saturating_sub(14).clamp(2, 5)
+    };
     let sections = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(4),
-        Constraint::Length(6),
+        Constraint::Length(footer_height),
         Constraint::Length(2),
     ])
     .split(area);
@@ -146,7 +152,9 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
         now_playing(frame, ui, state, heights[0], connection.is_none());
         queue(frame, ui, state, heights[1], connection.is_none());
     }
-    controls(frame, ui, state, sections[2]);
+    let (control_area, spectrum_area) = footer_layout(sections[2]);
+    controls(frame, ui, state, control_area);
+    footer_spectrum(frame, ui, spectrum_area);
     let notice = ui
         .notice
         .as_deref()
@@ -279,13 +287,6 @@ fn channel_meter(frame: &mut Frame, ui: &Ui, area: Rect) {
     );
 }
 
-fn spectrum_height(height: u16, motion: Motion) -> u16 {
-    if motion == Motion::Static || height < 9 {
-        1
-    } else {
-        (height / 3).clamp(2, 12)
-    }
-}
 fn queue(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect, connected: bool) {
     if area.width == 0 || area.height < 2 {
         return;
@@ -443,11 +444,7 @@ fn now_playing(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect, con
     }
     let inner = inside(area);
     frame.render_widget(block("正在放送", false), area);
-    let content_height = if inner.height >= 6 {
-        inner.height - spectrum_height(inner.height, ui.prefs.motion) - 1
-    } else {
-        inner.height
-    };
+    let content_height = inner.height;
     let audio_lines = stage_audio_lines(ui, state, connected, inner.width as usize);
     // Keep room for the title, artist and on-air label in short windows.
     let metrics_height = if content_height >= audio_lines.len() as u16 + 4 {
@@ -581,42 +578,62 @@ fn now_playing(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect, con
             Rect::new(inner.x, inner.y + stage_height, inner.width, metrics_height),
         );
     }
+}
 
-    if inner.height >= 6 {
-        let height = spectrum_height(inner.height, ui.prefs.motion);
-        let plot = Rect::new(inner.x, inner.bottom() - height, inner.width, height);
-        spectrum(frame, ui, plot);
-        let caption = if ui.prefs.motion == Motion::Static {
-            "静态 · 花瓣结界"
-        } else if !ui.available {
-            ui.spectrum_status
-        } else {
+fn spectrum_caption(ui: &Ui) -> String {
+    if ui.prefs.motion == Motion::Static {
+        "频谱 · 静态".into()
+    } else if !ui.available {
+        format!("频谱 · {}", ui.spectrum_status)
+    } else {
+        format!(
+            "频谱 40 Hz{}{:.1} kHz · {}",
+            if ui.prefs.ascii { "-" } else { "–" },
+            ui.spectrum_max_hz / 1000.0,
             ui.stage.label()
-        };
-        let caption = if ui.prefs.motion == Motion::Dynamic && ui.available {
-            format!(
-                "频谱 40 Hz{}{:.1} kHz · {caption}",
-                if ui.prefs.ascii { "-" } else { "–" },
-                ui.spectrum_max_hz / 1000.0
-            )
-        } else {
-            format!("频谱 · {caption}")
-        };
-        let caption_width = UnicodeWidthStr::width(caption.as_str()) as u16 + 2;
-        let separator = row(inner, inner.height - height - 1);
-        frame.render_widget(
-            Paragraph::new(if ui.prefs.ascii { "-" } else { "─" }.repeat(inner.width as usize))
-                .style(style(EDGE)),
-            separator,
-        );
-        super::battlefield::label(
-            frame,
-            separator,
-            Line::styled(format!(" {caption} "), style(SUB)),
-            caption_width,
-        );
+        )
     }
 }
+
+fn footer_layout(area: Rect) -> (Rect, Rect) {
+    if area.width >= FOOTER_SIDE_BY_SIDE_WIDTH {
+        // Keep all control rows usable while giving the remaining width to the spectrum.
+        let columns = Layout::horizontal([
+            Constraint::Length(58),
+            Constraint::Length(1),
+            Constraint::Min(40),
+        ])
+        .split(area);
+        (columns[0], columns[2])
+    } else {
+        let rows = Layout::vertical([Constraint::Length(5), Constraint::Min(2)]).split(area);
+        (rows[0], rows[1])
+    }
+}
+
+fn footer_spectrum(frame: &mut Frame, ui: &Ui, area: Rect) {
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(style(EDGE))
+            .title(Line::styled(
+                fit(&format!(" {} ", spectrum_caption(ui)), area.width as usize),
+                style(SUB),
+            )),
+        area,
+    );
+    spectrum(
+        frame,
+        ui,
+        Rect::new(
+            area.x,
+            area.y + 1,
+            area.width,
+            area.height.saturating_sub(1),
+        ),
+    );
+}
+
 fn spectrum(frame: &mut Frame, ui: &Ui, area: Rect) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -1064,6 +1081,97 @@ mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
     use std::time::Instant;
+
+    #[test]
+    fn footer_spectrum_docks_right_or_below_without_covering_controls() {
+        let mut state = Snapshot::new("footer-dock".into(), &Default::default());
+        state.phase = Phase::Online;
+        state.station_status =
+            Some(serde_json::json!({"current":{"title":"Footer spectrum", "artist":"Fixture"}}));
+        for (width, height) in [
+            (38, 16),
+            (38, 24),
+            (79, 30),
+            (99, 24),
+            (100, 16),
+            (100, 30),
+            (140, 40),
+            (320, 70),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut ui = Ui::new(super::super::model::Preferences::default());
+            ui.sync(&state);
+            ui.available = true;
+            ui.focus = Action::Play;
+            ui.bands = std::array::from_fn(|i| 0.3 + 0.6 * (i as f32 * 0.14).sin().abs());
+            ui.peaks = ui.bands.map(|value| (value + 0.1).min(1.0));
+            ui.stage.advance(
+                0.1,
+                &super::super::spectrum::MusicalFeatures {
+                    level: 0.6,
+                    intensity: 0.7,
+                    ..Default::default()
+                },
+            );
+            terminal.draw(|f| draw(f, &mut ui, &state, None)).unwrap();
+            let control_y = ui
+                .hits
+                .iter()
+                .find(|(_, action)| *action == Action::Play)
+                .unwrap()
+                .0
+                .y
+                - 1;
+            let footer = Rect::new(0, control_y, width, height - 2 - control_y);
+            let (control_area, spectrum_area) = footer_layout(footer);
+            if width >= FOOTER_SIDE_BY_SIDE_WIDTH {
+                assert!(spectrum_area.x > control_area.right());
+                assert_eq!(spectrum_area.y, control_area.y);
+                assert!(spectrum_area.width >= 40);
+            } else {
+                assert_eq!(spectrum_area.y, control_area.bottom());
+                assert_eq!(spectrum_area.width, width);
+            }
+            assert!(spectrum_area.height >= 2);
+            assert_eq!(spectrum_area.bottom(), height - 2);
+            for (rect, _) in &ui.hits {
+                let intersection = rect.intersection(spectrum_area);
+                assert!(intersection.width == 0 || intersection.height == 0);
+            }
+            for action in [
+                Action::Play,
+                Action::Stop,
+                Action::Down,
+                Action::Up,
+                Action::Source,
+                Action::Quality,
+                Action::Help,
+                Action::Quit,
+            ] {
+                assert!(
+                    ui.hits.iter().any(|(_, candidate)| *candidate == action),
+                    "missing {action:?} at {width}x{height}"
+                );
+            }
+            let buffer = terminal.backend().buffer();
+            let caption = (spectrum_area.x..spectrum_area.right())
+                .map(|x| buffer[(x, spectrum_area.y)].symbol())
+                .collect::<String>()
+                .replace(' ', "");
+            assert!(caption.contains("频谱"));
+            assert!((spectrum_area.x..spectrum_area.right()).any(|x| buffer
+                [(x, spectrum_area.bottom() - 1)]
+                .symbol()
+                .chars()
+                .any(|c| ('\u{2581}'..='\u{2588}').contains(&c))));
+            for y in control_area.y..control_area.bottom() {
+                for x in control_area.x..control_area.right() {
+                    assert!(matches!(buffer[(x, y)].bg, BG | EDGE | Color::Reset));
+                }
+            }
+            capture(buffer, &format!("footer-dock-{width}x{height}"));
+        }
+    }
 
     fn capture(buffer: &ratatui::buffer::Buffer, name: &str) {
         if let Some(path) = std::env::var_os("THMR_TUI_CAPTURE_DIR") {
@@ -1586,8 +1694,6 @@ mod tests {
             assert_eq!(text.contains("dBFS"), visible, "{width}x{height}");
             assert_eq!(ui.queue_rect.x, if visible { 13 } else { 1 });
         }
-        assert_eq!(spectrum_height(27, Motion::Dynamic), 9);
-        assert_eq!(spectrum_height(27, Motion::Static), 1);
     }
 
     #[test]
