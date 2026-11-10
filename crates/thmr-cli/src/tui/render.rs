@@ -1135,6 +1135,24 @@ fn controls(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect) {
         row(area, 4),
     );
 }
+fn clear_popup_overhang(frame: &mut Frame, rect: Rect) {
+    // A glyph starting outside Clear's rectangle can still occupy the left border cell.
+    // Remove that whole visible prefix so terminal diffing cannot skip the border as
+    // a continuation cell of a double-width background character.
+    for y in rect.y..rect.bottom() {
+        let mut x = frame.area().x;
+        while x < rect.x {
+            let cells = UnicodeWidthStr::width(frame.buffer_mut()[(x, y)].symbol()).max(1) as u16;
+            if x.saturating_add(cells) > rect.x {
+                for column in x..rect.x {
+                    frame.buffer_mut()[(column, y)].set_symbol(" ");
+                }
+            }
+            x = x.saturating_add(cells);
+        }
+    }
+}
+
 fn overlay(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect) {
     let width = area.width.saturating_sub(4).min(76);
     let height = area.height.saturating_sub(2).min(22);
@@ -1144,20 +1162,16 @@ fn overlay(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect) {
         width,
         height,
     );
+    clear_popup_overhang(frame, rect);
     frame.render_widget(Clear, rect);
-    frame.render_widget(
-        block(
-            if ui.overlay == Some(Overlay::Help) {
-                "使用帮助"
-            } else if ui.overlay == Some(Overlay::CurrentDetails) {
-                "正在放送 · 曲目信息"
-            } else {
-                "排播详情"
-            },
-            true,
-        ),
-        rect,
-    );
+    frame.render_widget(Block::default().style(style(FG)), rect);
+    let title = if ui.overlay == Some(Overlay::Help) {
+        "使用帮助"
+    } else if ui.overlay == Some(Overlay::CurrentDetails) {
+        "正在放送 · 曲目信息"
+    } else {
+        "排播详情"
+    };
     let inner = inside(rect);
     let body = Rect::new(
         inner.x,
@@ -1249,6 +1263,14 @@ fn overlay(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect) {
         true,
         false,
     );
+    // Draw only the border and caption last; keep the content and close-button styles intact.
+    frame.render_widget(
+        Block::default()
+            .title(Line::styled(format!(" {title} "), style(CYAN)))
+            .borders(Borders::ALL)
+            .border_style(style(CYAN)),
+        rect,
+    );
 }
 fn compact(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect, connection: Option<&str>) {
     if area.height == 0 || area.width == 0 {
@@ -1333,6 +1355,88 @@ mod tests {
             result.push('\n');
         }
         result
+    }
+
+    #[test]
+    fn popup_border_remains_visible_above_wide_background_text() {
+        let mut state = Snapshot::new("popup-border".into(), &Default::default());
+        state.phase = Phase::Online;
+        let wide_title = "东方幻想交响曲".repeat(30);
+        state.station_status = Some(serde_json::json!({
+            "current":{"title":wide_title, "artist":"柏木るざりん"},
+            "queue":(1..=30).map(|id| serde_json::json!({"trackId":id, "title":wide_title, "artist":"柏木るざりん", "album":"幻想乡音乐专辑"})).collect::<Vec<_>>()
+        }));
+        for (width, height) in [
+            (110, 34),
+            (112, 34),
+            (114, 34),
+            (140, 40),
+            (142, 40),
+            (38, 16),
+        ] {
+            for motion in [Motion::Static, Motion::Dynamic] {
+                for kind in [Overlay::Details, Overlay::CurrentDetails, Overlay::Help] {
+                    let mut ui = Ui::new(super::super::model::Preferences {
+                        motion,
+                        ascii: false,
+                    });
+                    ui.sync(&state);
+                    ui.selected = 1;
+                    ui.modal(kind);
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    for scroll in [0, u16::MAX] {
+                        ui.overlay_scroll = scroll;
+                        terminal.draw(|f| draw(f, &mut ui, &state, None)).unwrap();
+                        let buffer = terminal.backend().buffer();
+                        let popup = Rect::new(
+                            (width - (width - 4).min(76)) / 2,
+                            (height - (height - 2).min(22)) / 2,
+                            (width - 4).min(76),
+                            (height - 2).min(22),
+                        );
+                        for y in popup.y..popup.bottom() {
+                            let mut x = 0;
+                            while x < popup.x {
+                                let symbol = buffer[(x, y)].symbol();
+                                let cells = UnicodeWidthStr::width(symbol).max(1) as u16;
+                                assert!(x + cells <= popup.x, "border at ({}, {y}) covered by {symbol:?} at x={x}, viewport {width}x{height}, mode={motion:?}", popup.x);
+                                x += cells;
+                            }
+                            for edge in [popup.x, popup.right() - 1] {
+                                let expected = if y == popup.y {
+                                    if edge == popup.x {
+                                        "┌"
+                                    } else {
+                                        "┐"
+                                    }
+                                } else if y == popup.bottom() - 1 {
+                                    if edge == popup.x {
+                                        "└"
+                                    } else {
+                                        "┘"
+                                    }
+                                } else {
+                                    "│"
+                                };
+                                assert_eq!(
+                                    buffer[(edge, y)].symbol(),
+                                    expected,
+                                    "edge ({edge}, {y}) at {width}x{height}"
+                                );
+                                assert_eq!(buffer[(edge, y)].fg, CYAN);
+                            }
+                        }
+                        assert_eq!(ui.hits.len(), 1);
+                        assert_eq!(ui.hits[0].1, Action::Close);
+                        if kind == Overlay::Details && scroll == 0 {
+                            assert_eq!(buffer[(popup.x + 1, popup.y + 1)].fg, CYAN);
+                            assert_eq!(buffer[(ui.hits[0].0.x, ui.hits[0].0.y)].bg, EDGE);
+                            capture(buffer, &format!("popup-border-{width}x{height}-{motion:?}"));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn waveform_fixture() -> super::super::spectrum::Waveform {
