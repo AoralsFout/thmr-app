@@ -102,7 +102,7 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled(" THMR", style(CYAN).bold()),
+                Span::styled(" ☯ THMR", style(CYAN).bold()),
                 Span::styled(" // GENSOKYO SIGNAL", style(SUB)),
             ]),
             Line::from(format!(
@@ -290,7 +290,7 @@ fn queue(frame: &mut Frame, ui: &mut Ui, area: Rect) {
     if area.width == 0 || area.height < 2 {
         return;
     }
-    let border = block("电台排播 · 只读", ui.focus == Action::Queue);
+    let border = block("电台排播", ui.focus == Action::Queue);
     let inner = border.inner(area);
     frame.render_widget(border, area);
     ui.queue_rect = inner;
@@ -761,7 +761,7 @@ fn controls(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect) {
         .tracks
         .get(ui.selected)
         .map(|t| format!("选中：{} / {}", t.title, t.artist))
-        .unwrap_or_else(|| "排播只读 · m 切换动效 · x 基础字符".into());
+        .unwrap_or_else(|| "排播 · m 切换动效 · x 基础字符".into());
     frame.render_widget(
         Paragraph::new(fit(&summary, area.width as usize)).style(style(SUB)),
         row(area, 4),
@@ -784,7 +784,7 @@ fn overlay(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect) {
             } else if ui.overlay == Some(Overlay::CurrentDetails) {
                 "正在放送 · 曲目信息"
             } else {
-                "排播详情 · 只读"
+                "排播详情"
             },
             true,
         ),

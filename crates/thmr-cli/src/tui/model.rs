@@ -88,7 +88,7 @@ pub enum Action {
 impl Action {
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Queue | Self::Select(_) => "↑↓ / j k 浏览 · Enter 查看详情 · 排播只读",
+            Self::Queue | Self::Select(_) => "↑↓ / j k 浏览 · Enter 查看详情 · 排播",
             Self::Play => "Space 播放 / 暂停",
             Self::Stop => "s 停止播放",
             Self::Down => "- 音量降低 2%",
