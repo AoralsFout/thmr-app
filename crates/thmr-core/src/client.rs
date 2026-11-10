@@ -6,7 +6,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 #[cfg(not(windows))]
 use std::process::{Command as Process, Stdio};
-use std::{path::Path, time::Duration};
+use std::{io::Read, path::Path, time::Duration};
 
 #[derive(Clone)]
 pub struct Client {
@@ -81,15 +81,60 @@ impl Client {
             Endpoint::read(&runtime::runtime_dir()?)?;
         }
         let daemon = daemon_path()?;
-        spawn_detached(&daemon, &[])?;
+        let runtime_dir = runtime::runtime_dir()?;
+        runtime::private_dir(&runtime_dir).with_context(|| {
+            format!(
+                "cannot create THMR runtime directory {}",
+                runtime_dir.display()
+            )
+        })?;
+        let log_path = runtime_dir.join("host-startup.log");
+        std::fs::File::create(&log_path).with_context(|| {
+            format!("cannot write THMR startup log {}; check directory permissions and Windows executable integrity labels", log_path.display())
+        })?;
+        spawn_detached(
+            &daemon,
+            &[
+                "--startup-log",
+                log_path.to_str().context("invalid startup log path")?,
+            ],
+        )?;
         for _ in 0..100 {
             tokio::time::sleep(Duration::from_millis(100)).await;
             if let Ok(client) = Self::discover().await {
                 return Ok(client);
             }
+            if let Some(detail) = startup_detail(&log_path) {
+                // Another simultaneous CLI may own the lock but still be initializing.
+                if detail.contains("THMR is already running in this user session") {
+                    continue;
+                }
+                bail!(
+                    "THMR host failed during startup: {detail}\nLog: {}",
+                    log_path.display()
+                );
+            }
         }
-        bail!("THMR host did not become ready; run thmrd in a terminal or thmr doctor for diagnostics")
+        bail!(
+            "THMR host did not become ready; {}\nLog: {}",
+            startup_detail(&log_path).unwrap_or_else(|| {
+                "no startup error was recorded; run thmrd or thmr doctor for diagnostics".into()
+            }),
+            log_path.display()
+        )
     }
+}
+
+fn startup_detail(path: &Path) -> Option<String> {
+    let mut bytes = Vec::new();
+    let result = std::fs::File::open(path).and_then(|file| file.take(8192).read_to_end(&mut bytes));
+    if result.is_err() || bytes.is_empty() {
+        return None;
+    }
+    if bytes.len() < 8192 && !bytes.ends_with(b"\n") {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&bytes).trim().to_owned())
 }
 
 pub fn daemon_path() -> Result<std::path::PathBuf> {

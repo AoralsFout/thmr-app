@@ -18,17 +18,36 @@ use thmr_core::{
 use tokio::sync::{mpsc, watch};
 
 fn main() {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let startup_log = if args.first().is_some_and(|arg| arg == "--startup-log") && args.len() >= 2 {
+        let path = std::path::PathBuf::from(&args[1]);
+        args.drain(..2);
+        Some(path)
+    } else {
+        None
+    };
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .init();
-    if let Err(error) = run() {
+    if let Err(error) = run(args) {
+        // Write from inside the host: inheriting the caller's stdout/stderr handles
+        // would keep captured CLI invocations open after the CLI itself exits.
+        if let Some(path) = startup_log {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(path)
+            {
+                let _ = file.write_all(format!("thmrd: {error:#}\n").as_bytes());
+            }
+        }
         eprintln!("thmrd: {error:#}");
         std::process::exit(1);
     }
 }
-fn run() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+fn run(args: Vec<String>) -> Result<()> {
     if args.iter().any(|arg| arg == "--version") {
         println!(
             "THMR {}+{} · protocol {}",
@@ -50,8 +69,15 @@ fn run() -> Result<()> {
     if !args.is_empty() {
         anyhow::bail!("unknown host argument; see thmrd --help");
     }
-    let guard = InstanceGuard::acquire(&runtime::runtime_dir()?)?;
-    runtime::private_dir(&runtime::config_dir()?)?;
+    let runtime_dir = runtime::runtime_dir()?;
+    let guard = InstanceGuard::acquire(&runtime_dir).with_context(|| {
+        format!(
+            "cannot open THMR runtime directory {}",
+            runtime_dir.display()
+        )
+    })?;
+    runtime::private_dir(&runtime::config_dir()?)
+        .context("cannot create THMR configuration directory")?;
     let path = runtime::config_dir()?.join("settings.toml");
     let settings = Settings::load(&path)?;
     let (media_tx, media_rx) = mpsc::unbounded_channel();
@@ -72,7 +98,8 @@ fn run() -> Result<()> {
         let _guard = guard;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .build()?;
+            .build()
+            .context("cannot initialize THMR event loop")?;
         runtime.block_on(async move {
             let instance = runtime::random_id();
             let mut session = session::Session::new(settings, path, instance.clone())?;
@@ -82,7 +109,9 @@ fn run() -> Result<()> {
                 watch::channel(thmr_core::audio::AudioFrame::empty(instance.clone(), 0));
             let (commands, command_rx) = mpsc::channel(64);
             let (stop, mut stop_rx) = watch::channel(false);
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .context("cannot bind THMR loopback listener")?;
             let endpoint = Endpoint {
                 protocol_version: thmr_core::PROTOCOL_VERSION,
                 port: listener.local_addr()?.port(),
@@ -107,7 +136,9 @@ fn run() -> Result<()> {
                     })
                     .await
             });
-            _guard.publish(&endpoint)?;
+            _guard.publish(&endpoint).with_context(|| {
+                format!("cannot publish THMR endpoint in {}", runtime_dir.display())
+            })?;
             let update = tokio::spawn(async move {
                 let mut snapshot_rx = snapshot_rx;
                 loop {

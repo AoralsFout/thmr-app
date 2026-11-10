@@ -84,4 +84,6 @@ GUI 明确退出会先请求停止播放并关闭宿主。后台服务不可达�
 
 升级前执行 `thmr daemon stop` 并关闭 TUI。完整桌面包使用 GUI 自更新；独立终端包当前手动替换完整目录。首次从 0.1.x 桌面版切换时先退出旧 GUI，重新确认音量、来源和码率；旧播放设置尚未自动迁移。
 
+宿主启动失败时，CLI 会直接显示提前退出的错误，并给出运行目录内 `host-startup.log` 的位置。Windows 本地构建若报“拒绝访问”，请检查 EXE 是否继承了 Low 完整性标签：该标签会使普通终端启动的程序也无法写入正常 AppData。构建目录标签的修正步骤见 `docs/DEVELOPMENT.md` 的 Windows 完整性说明；不要通过放宽 AppData 权限来处理。
+
 终端账号授权、收藏操作和跨设备遥控尚未实现。Flutter GUI 的频谱与 TUI 分开实现；Linux GUI 共享宿主模式仍保持静态，Windows GUI 保留系统输出频谱。其他平台限制和验收要求见源码仓库的 `docs/DEVELOPMENT.md`。内置 MP3 解码器的 CC0 许可证随终端包放在 `licenses/minimp3/LICENSE`。

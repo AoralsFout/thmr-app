@@ -3,9 +3,9 @@ name: Native host
 on:
   push:
     branches: [main, codex/unified-cli-tui-gui]
-    paths: ['crates/**', 'Cargo.*', 'native/**', 'test/fixtures/**', 'rust-toolchain.toml', 'protocol/**', 'pubspec.yaml', 'tool/test_unified_host.py', 'tool/test_shared_audio_host.py', '.github/workflows/native.yml']
+    paths: ['crates/**', 'Cargo.*', 'native/**', 'test/fixtures/**', 'rust-toolchain.toml', 'protocol/**', 'pubspec.yaml', 'tool/test_unified_host.py', 'tool/test_shared_audio_host.py', 'tool/test_host_startup.py', '.github/workflows/native.yml']
   pull_request:
-    paths: ['crates/**', 'Cargo.*', 'native/**', 'test/fixtures/**', 'rust-toolchain.toml', 'protocol/**', 'pubspec.yaml', 'tool/test_unified_host.py', 'tool/test_shared_audio_host.py', '.github/workflows/native.yml']
+    paths: ['crates/**', 'Cargo.*', 'native/**', 'test/fixtures/**', 'rust-toolchain.toml', 'protocol/**', 'pubspec.yaml', 'tool/test_unified_host.py', 'tool/test_shared_audio_host.py', 'tool/test_host_startup.py', '.github/workflows/native.yml']
   workflow_dispatch:
 
 permissions:
@@ -34,6 +34,7 @@ jobs:
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo test --workspace --locked
           cargo build --workspace --locked
+          python tool/test_host_startup.py
       - name: Isolated Linux playback and native host smoke
         if: runner.os == 'Linux'
         run: |
