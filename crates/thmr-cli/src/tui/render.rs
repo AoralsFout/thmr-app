@@ -135,7 +135,7 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
     if body.width >= 80 {
         let columns = Layout::horizontal([Constraint::Percentage(31), Constraint::Percentage(69)])
             .split(body);
-        queue(frame, ui, columns[0]);
+        queue(frame, ui, state, columns[0], connection.is_none());
         now_playing(frame, ui, state, columns[1]);
     } else {
         let heights = Layout::vertical([
@@ -144,7 +144,7 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
         ])
         .split(body);
         now_playing(frame, ui, state, heights[0]);
-        queue(frame, ui, heights[1]);
+        queue(frame, ui, state, heights[1], connection.is_none());
     }
     controls(frame, ui, state, sections[2]);
     let notice = ui
@@ -286,7 +286,7 @@ fn spectrum_height(height: u16, motion: Motion) -> u16 {
         (height / 3).clamp(2, 12)
     }
 }
-fn queue(frame: &mut Frame, ui: &mut Ui, area: Rect) {
+fn queue(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect, connected: bool) {
     if area.width == 0 || area.height < 2 {
         return;
     }
@@ -301,6 +301,25 @@ fn queue(frame: &mut Frame, ui: &mut Ui, area: Rect) {
         frame.render_widget(Paragraph::new("等待排播信息").style(style(SUB)), inner);
         return;
     }
+    let blink = ui.prefs.motion == Motion::Dynamic
+        && ui.active(state, connected)
+        && state.volume > 0.0
+        && ui.overlay.is_none();
+    let brightness = if blink {
+        0.825
+            + 0.175 * (ui.title_changed.elapsed().as_secs_f64() * std::f64::consts::TAU / 1.2).cos()
+    } else {
+        1.0
+    };
+    let note_color = match CYAN {
+        Color::Rgb(r, g, b) => Color::Rgb(
+            (f64::from(r) * brightness).round() as u8,
+            (f64::from(g) * brightness).round() as u8,
+            (f64::from(b) * brightness).round() as u8,
+        ),
+        color => color,
+    };
+    let current_count = usize::from(ui.tracks[0].is_current);
     for (index, track) in ui
         .tracks
         .iter()
@@ -319,7 +338,12 @@ fn queue(frame: &mut Frame, ui: &mut Ui, area: Rect) {
         } else {
             " "
         };
-        let line = format!("{marker} {:02} {}", index + 1, track.title);
+        let label = if track.is_current {
+            if ui.prefs.ascii { "* " } else { "♪ " }.to_owned()
+        } else {
+            format!("{:02}", index + 1 - current_count)
+        };
+        let line = format!("{marker} {label} {}", track.title);
         let hovered = ui.hover == Some(Action::Select(index));
         frame.render_widget(
             Paragraph::new(fit(&line, rect.width as usize)).style(if selected || hovered {
@@ -329,6 +353,10 @@ fn queue(frame: &mut Frame, ui: &mut Ui, area: Rect) {
             }),
             rect,
         );
+        // Pulse only the note's foreground, preserving the glyph and selection background.
+        if track.is_current && rect.width > 2 {
+            frame.buffer_mut()[(rect.x + 2, rect.y)].set_fg(note_color);
+        }
         ui.hits.push((rect, Action::Select(index)));
     }
     if ui.tracks.len() > inner.height as usize && inner.height > 0 {
@@ -970,6 +998,148 @@ mod tests {
                 directory.join(format!("{name}.json")),
                 serde_json::to_vec(&serde_json::json!({"width":buffer.area.width,"height":buffer.area.height,"cells":cells})).unwrap(),
             ).unwrap();
+        }
+    }
+
+    #[test]
+    fn queue_note_pulses_brightness_without_hiding_or_changing_row_styles() {
+        for (ascii, motion, phase, paused, connected, volume, overlay, blinking) in [
+            (
+                false,
+                Motion::Dynamic,
+                Phase::Online,
+                false,
+                true,
+                65.0,
+                None,
+                true,
+            ),
+            (
+                true,
+                Motion::Dynamic,
+                Phase::Online,
+                false,
+                true,
+                65.0,
+                None,
+                true,
+            ),
+            (
+                false,
+                Motion::Static,
+                Phase::Online,
+                false,
+                true,
+                65.0,
+                None,
+                false,
+            ),
+            (
+                false,
+                Motion::Dynamic,
+                Phase::Online,
+                true,
+                true,
+                65.0,
+                None,
+                false,
+            ),
+            (
+                false,
+                Motion::Dynamic,
+                Phase::Idle,
+                false,
+                true,
+                65.0,
+                None,
+                false,
+            ),
+            (
+                false,
+                Motion::Dynamic,
+                Phase::Online,
+                false,
+                false,
+                65.0,
+                None,
+                false,
+            ),
+            (
+                false,
+                Motion::Dynamic,
+                Phase::Online,
+                false,
+                true,
+                0.0,
+                None,
+                false,
+            ),
+            (
+                false,
+                Motion::Dynamic,
+                Phase::Online,
+                false,
+                true,
+                65.0,
+                Some(Overlay::Help),
+                false,
+            ),
+        ] {
+            let mut state = Snapshot::new("queue-preview".into(), &Default::default());
+            state.phase = phase;
+            state.user_paused = paused;
+            state.volume = volume;
+            state.station_status = Some(serde_json::json!({
+                "current":{"trackId":"current", "title":"Shared title"},
+                "queue":[{"trackId":"next", "title":"Shared title"}]
+            }));
+            let mut ui = Ui::new(super::super::model::Preferences { ascii, motion });
+            ui.sync(&state);
+            ui.overlay = overlay;
+            let mut terminal = Terminal::new(TestBackend::new(55, 6)).unwrap();
+            for selected in [0, 1] {
+                ui.selected = selected;
+                let mut colors = Vec::new();
+                for age in [100, 700] {
+                    ui.title_changed = Instant::now() - std::time::Duration::from_millis(age);
+                    terminal
+                        .draw(|f| queue(f, &mut ui, &state, f.area(), connected))
+                        .unwrap();
+                    let buffer = terminal.backend().buffer();
+                    let note = &buffer[(3, 1)];
+                    assert_eq!(note.symbol(), if ascii { "*" } else { "♪" });
+                    assert_eq!(note.bg, if selected == 0 { EDGE } else { BG });
+                    assert_ne!(note.fg, note.bg);
+                    colors.push(note.fg);
+                    assert_eq!(buffer[(3, 2)].symbol(), "0");
+                    assert_eq!(buffer[(4, 2)].symbol(), "1");
+                    for y in [1, 2] {
+                        let is_selected = selected == y as usize - 1;
+                        assert_eq!(
+                            buffer[(1, y)].symbol(),
+                            if !is_selected {
+                                " "
+                            } else if ascii {
+                                ">"
+                            } else {
+                                "▸"
+                            }
+                        );
+                        let title = (6..18).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+                        assert_eq!(title, "Shared title");
+                        assert_eq!(buffer[(6, y)].fg, if is_selected { CYAN } else { FG });
+                        assert_eq!(buffer[(6, y)].bg, if is_selected { EDGE } else { BG });
+                    }
+                    if blinking && !ascii {
+                        capture(buffer, &format!("queue-note-{selected}-{age}"));
+                    }
+                }
+                if blinking {
+                    assert_ne!(colors[0], colors[1]);
+                } else {
+                    assert_eq!(colors[0], colors[1]);
+                }
+            }
         }
     }
 

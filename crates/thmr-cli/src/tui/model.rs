@@ -113,6 +113,7 @@ pub enum Overlay {
 }
 #[derive(Clone)]
 pub struct Track {
+    pub is_current: bool,
     pub key: String,
     pub title: String,
     pub artist: String,
@@ -134,6 +135,7 @@ impl Track {
         let title = text(value.get("title"));
         let artist = text(value.get("artist"));
         Self {
+            is_current: false,
             key: format!(
                 "{}|{title}|{artist}",
                 value
@@ -243,24 +245,29 @@ impl Ui {
         self.instance = state.instance_id.clone();
         self.revision = state.revision;
         let old_key = self.tracks.get(self.selected).map(|t| t.key.clone());
-        self.tracks = state
-            .station_status
-            .as_ref()
-            .and_then(|s| s.get("queue"))
-            .and_then(Value::as_array)
+        let current = state.current().map(|value| Track {
+            is_current: true,
+            ..Track::from(value)
+        });
+        let key = current.as_ref().map(|t| t.key.clone()).unwrap_or_default();
+        // The station queue contains upcoming tracks; keep the current broadcast visible too.
+        self.tracks = current
             .into_iter()
-            .flatten()
-            .map(Track::from)
+            .chain(
+                state
+                    .station_status
+                    .as_ref()
+                    .and_then(|s| s.get("queue"))
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(Track::from),
+            )
             .collect();
         self.selected = old_key
             .and_then(|key| self.tracks.iter().position(|t| t.key == key))
             .unwrap_or(self.selected)
             .min(self.tracks.len().saturating_sub(1));
-        let key = state
-            .current()
-            .map(Track::from)
-            .map(|t| t.key)
-            .unwrap_or_default();
         if key != self.current_key {
             self.title_changed = Instant::now();
             self.current_key = key;
@@ -618,6 +625,32 @@ mod tests {
             ui.tick(&state, reason != 3, &audio);
             assert_eq!(ui.stage.time, frozen, "freeze reason {reason}");
         }
+    }
+
+    #[test]
+    fn queue_includes_current_broadcast_and_preserves_selection_when_it_advances() {
+        let mut ui = Ui::new(Preferences::default());
+        let mut state = Snapshot::new("test".into(), &Default::default());
+        state.station_status = Some(serde_json::json!({
+            "current":{"trackId":"a", "title":"第一首"},
+            "queue":[{"trackId":"b", "title":"第二首"}, {"trackId":"a", "title":"第一首"}]
+        }));
+        ui.sync(&state);
+        assert_eq!(ui.tracks.len(), 3);
+        assert!(ui.tracks[0].is_current);
+        assert!(ui.tracks[1..].iter().all(|track| !track.is_current));
+        // A later repeat of the same song is still an upcoming queue entry.
+        assert_eq!(ui.tracks[0].key, ui.tracks[2].key);
+        ui.select(1);
+        state.revision += 1;
+        state.station_status = Some(serde_json::json!({
+            "current":{"trackId":"b", "title":"第二首"},
+            "queue":[{"trackId":"a", "title":"第一首"}]
+        }));
+        ui.sync(&state);
+        assert_eq!(ui.selected, 0);
+        assert!(ui.tracks[ui.selected].is_current);
+        assert_eq!(ui.tracks[ui.selected].title, "第二首");
     }
 
     #[test]
