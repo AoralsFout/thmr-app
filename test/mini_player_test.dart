@@ -383,7 +383,7 @@ void main() {
       if (widget is! Image || widget.image is! ResizeImage) return false;
       final image = (widget.image as ResizeImage).imageProvider;
       return image is AssetImage &&
-          image.assetName == 'assets/brand/background.png';
+          image.assetName == 'assets/brand/background_alt.png';
     });
     expect(illustration, findsOneWidget);
     await settings.setMiniShowIllustration(false);

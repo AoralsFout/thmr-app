@@ -34,7 +34,6 @@ GitHub Actions 配置如下：
 | --- | --- |
 | `THMR_UPDATE_PUBLIC_KEY` | Base64 更新公钥，正式标签构建必需 |
 | `THMR_UPDATE_API_URL` | 可选，默认上述 API 地址 |
-| `THMR_MACOS_RUNNER` | 可选，覆盖 macOS 构建运行器，默认值见工作流 |
 
 | Repository Secret | 用途 |
 | --- | --- |

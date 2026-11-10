@@ -15,7 +15,7 @@ on:
         type: choice
         options: [all, linux, macos, windows, android]
       version:
-        description: 'Client version (optional, e.g. 0.2.0; defaults to pubspec.yaml)'
+        description: 'Client version (optional, e.g. 0.1.7-aorals.1; defaults to pubspec.yaml)'
         required: false
         type: string
   pull_request:
@@ -179,8 +179,12 @@ jobs:
   macos:
     if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos'
     needs: [validate, prepare_release]
-    # The arm64 pool currently fails to acquire runners. Intel still builds both architectures.
-    runs-on: ${{ vars.THMR_MACOS_RUNNER || 'macos-26-intel' }}
+    # Plain macos-* labels are Apple Silicon (macos-26 = arm64); the -intel
+    # suffix is the Intel fallback. The earlier "cannot acquire a runner"
+    # episodes came from the retired macos-14 label, not a capacity shortage.
+    # Universal output is unchanged: ARCHS_STANDARD still builds both slices.
+    runs-on: macos-26
+    timeout-minutes: 60
     permissions:
       contents: write
     steps:

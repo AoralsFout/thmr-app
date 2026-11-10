@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "thmr-cli"
-version = "0.2.0-dev.1"
+version = "0.1.7-aorals.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2336,7 +2336,7 @@ dependencies = [
 
 [[package]]
 name = "thmr-core"
-version = "0.2.0-dev.1"
+version = "0.1.7-aorals.1"
 dependencies = [
  "anyhow",
  "directories",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "thmr-daemon"
-version = "0.2.0-dev.1"
+version = "0.1.7-aorals.1"
 dependencies = [
  "anyhow",
  "axum",

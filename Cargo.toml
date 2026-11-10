@@ -3,7 +3,7 @@ members = ["crates/thmr-core", "crates/thmr-daemon", "crates/thmr-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0-dev.1"
+version = "0.1.7-aorals.1"
 edition = "2021"
 rust-version = "1.88"
 publish = false
