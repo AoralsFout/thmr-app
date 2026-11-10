@@ -9,7 +9,7 @@ pub fn full_range(rate: u32) -> f32 {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct DisplaySpectrum {
-    #[serde(with = "super::band_array")]
+    #[serde(with = "super::float_array")]
     pub bands: [f32; BANDS],
     pub max_hz: f32,
 }

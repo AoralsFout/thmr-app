@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-pub use thmr_core::audio::{ChannelLevels, MusicalFeatures, BANDS};
+pub use thmr_core::audio::{ChannelLevels, MusicalFeatures, Waveform, BANDS};
 use thmr_core::{audio::AudioFrame, client::Client, PROTOCOL_VERSION};
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
@@ -14,6 +14,7 @@ pub struct Spectrum {
     pub display: thmr_core::audio::display::DisplaySpectrum,
     pub levels: ChannelLevels,
     pub music: MusicalFeatures,
+    pub waveform: Option<Waveform>,
     pub updated: Option<Instant>,
     pub status: &'static str,
     pub instance_id: String,
@@ -26,6 +27,7 @@ impl Default for Spectrum {
             display: Default::default(),
             levels: Default::default(),
             music: Default::default(),
+            waveform: None,
             updated: None,
             status: "等待播放",
             instance_id: String::new(),
@@ -118,6 +120,7 @@ fn accept(frame: AudioFrame, output: &SharedSpectrum) {
             value.display = feature.display;
             value.levels = feature.levels;
             value.music = feature.music;
+            value.waveform = feature.waveform;
             value.updated = Some(Instant::now());
             value.status = "播放时钟同步频谱";
         }
@@ -130,6 +133,24 @@ fn accept(frame: AudioFrame, output: &SharedSpectrum) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn received_waveform_uses_the_due_feature_and_is_cleared_by_inactive_frames() {
+        let output = Arc::new(Mutex::new(Spectrum::default()));
+        let mut analyzer = thmr_core::audio::Analyzer::default();
+        analyzer.add(&vec![-0.25; 2048], 48000, 1).unwrap();
+        let mut frame = AudioFrame::empty("wave-host".into(), 4);
+        frame.active = true;
+        frame.sample_rate = 48000;
+        frame.playback_sample = 2048;
+        frame.feature = Some(analyzer.snapshot(2048));
+        assert!(frame.valid());
+        accept(frame, &output);
+        assert_eq!(output.lock().unwrap().waveform.unwrap().min[0], -0.25);
+        accept(AudioFrame::empty("wave-host".into(), 4), &output);
+        assert!(output.lock().unwrap().waveform.is_none());
+    }
+
     #[test]
     fn new_epoch_and_inactive_frames_clear_old_content_instead_of_showing_stale_metrics() {
         let output = Arc::new(Mutex::new(Spectrum {

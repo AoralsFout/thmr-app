@@ -470,6 +470,7 @@ mod tests {
             display: Default::default(),
             levels: Default::default(),
             music: Default::default(),
+            waveform: None,
         }
     }
 

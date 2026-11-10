@@ -170,6 +170,7 @@ pub struct Ui {
     pub pending: usize,
     pub bands: [f32; BANDS],
     pub peaks: [f32; BANDS],
+    pub waveform: Option<spectrum::Waveform>,
     peak_hold: [f32; BANDS],
     pub spectrum_max_hz: f32,
     pub channel_rms: [f32; 2],
@@ -215,6 +216,7 @@ impl Ui {
             pending: 0,
             bands: [0.0; BANDS],
             peaks: [0.0; BANDS],
+            waveform: None,
             peak_hold: [0.0; BANDS],
             spectrum_max_hz: 16000.0,
             channel_rms: [0.0; 2],
@@ -241,6 +243,7 @@ impl Ui {
         }
         if self.instance != state.instance_id {
             self.pending_volume = None;
+            self.waveform = None;
         }
         self.instance = state.instance_id.clone();
         self.revision = state.revision;
@@ -360,6 +363,10 @@ impl Ui {
         let was_available = self.available;
         if self.audio_epoch != spectrum.epoch {
             self.audio_epoch = spectrum.epoch;
+            // An inactive subscription uses epoch zero; pause must preserve the last waveform.
+            if spectrum.epoch != 0 {
+                self.waveform = None;
+            }
             self.stage.suspend(&spectrum.music);
             self.bands.fill(0.0);
             self.peaks.fill(0.0);
@@ -465,6 +472,7 @@ impl Ui {
             }
         }
         if active && !muted && self.overlay.is_none() {
+            self.waveform = spectrum.waveform;
             self.clock += dt as f64;
             self.stage.advance(dt, &spectrum.music);
         } else {
@@ -625,6 +633,64 @@ mod tests {
             ui.tick(&state, reason != 3, &audio);
             assert_eq!(ui.stage.time, frozen, "freeze reason {reason}");
         }
+    }
+
+    #[test]
+    fn waveform_freezes_with_the_stage_and_resets_for_new_audio_epochs() {
+        let mut state = Snapshot::new("wave-host".into(), &Default::default());
+        state.phase = Phase::Online;
+        let mut ui = Ui::new(Preferences::default());
+        let mut audio = Spectrum {
+            epoch: 7,
+            updated: Some(Instant::now()),
+            waveform: Some(spectrum::Waveform {
+                min: [-0.4; 128],
+                max: [0.4; 128],
+            }),
+            ..Default::default()
+        };
+        ui.tick(&state, true, &audio);
+        assert_eq!(ui.waveform.unwrap().max[0], 0.4);
+        audio.waveform.as_mut().unwrap().max.fill(0.9);
+        for reason in 0..6 {
+            state.user_paused = reason == 0;
+            state.volume = if reason == 1 { 0.0 } else { 70.0 };
+            ui.overlay = if reason == 2 {
+                Some(Overlay::Help)
+            } else {
+                None
+            };
+            ui.prefs.motion = if reason == 5 {
+                Motion::Static
+            } else {
+                Motion::Dynamic
+            };
+            audio.updated = Some(
+                Instant::now()
+                    - if reason == 4 {
+                        Duration::from_secs(2)
+                    } else {
+                        Duration::ZERO
+                    },
+            );
+            ui.tick(&state, reason != 3, &audio);
+            assert_eq!(ui.waveform.unwrap().max[0], 0.4, "freeze reason {reason}");
+        }
+        ui.tick(&state, true, &Spectrum::default());
+        assert_eq!(ui.waveform.unwrap().max[0], 0.4);
+        ui.prefs.motion = Motion::Dynamic;
+        audio.updated = Some(Instant::now());
+        ui.tick(&state, true, &audio);
+        assert_eq!(ui.waveform.unwrap().max[0], 0.9);
+        ui.tick(
+            &state,
+            true,
+            &Spectrum {
+                epoch: 8,
+                ..Default::default()
+            },
+        );
+        assert!(ui.waveform.is_none());
     }
 
     #[test]

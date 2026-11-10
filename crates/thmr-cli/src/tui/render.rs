@@ -452,7 +452,12 @@ fn now_playing(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect, con
     } else {
         0
     };
-    let stage_height = content_height - metrics_height;
+    let waveform_height = if ui.prefs.motion == Motion::Static {
+        0
+    } else {
+        (content_height - metrics_height).saturating_sub(6).min(3)
+    };
+    let stage_height = content_height - metrics_height - waveform_height;
     let stage_area = Rect::new(inner.x, inner.y, inner.width, stage_height);
     ui.stage.viewport(stage_area.width, stage_area.height);
     ui.poster.viewport(stage_area.width, stage_area.height);
@@ -572,10 +577,110 @@ fn now_playing(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect, con
         );
     }
 
+    if waveform_height > 0 {
+        waveform(
+            frame,
+            ui,
+            Rect::new(
+                inner.x,
+                inner.y + stage_height,
+                inner.width,
+                waveform_height,
+            ),
+        );
+    }
     if metrics_height > 0 {
         frame.render_widget(
             Paragraph::new(audio_lines).style(style(SUB)),
-            Rect::new(inner.x, inner.y + stage_height, inner.width, metrics_height),
+            Rect::new(
+                inner.x,
+                inner.y + stage_height + waveform_height,
+                inner.width,
+                metrics_height,
+            ),
+        );
+    }
+}
+
+fn waveform_range(wave: &super::spectrum::Waveform, point: usize, points: usize) -> (f32, f32) {
+    let length = wave.min.len();
+    let start = (point * length / points).min(length - 1);
+    let end = ((point + 1) * length)
+        .div_ceil(points)
+        .max(start + 1)
+        .min(length);
+    (
+        wave.min[start..end].iter().copied().fold(1.0, f32::min),
+        wave.max[start..end].iter().copied().fold(-1.0, f32::max),
+    )
+}
+
+fn waveform(frame: &mut Frame, ui: &Ui, area: Rect) {
+    use ratatui::{
+        symbols::Marker,
+        widgets::canvas::{Canvas, Line as Stroke},
+    };
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    frame.render_widget(Clear, area);
+    frame.render_widget(Block::default().style(style(SUB)), area);
+    let middle = row(area, area.height / 2);
+    let Some(wave) = ui.waveform.as_ref() else {
+        frame.render_widget(
+            Paragraph::new(fit("WAVE WAIT", area.width as usize)).style(style(SUB)),
+            middle,
+        );
+        return;
+    };
+    frame.render_widget(Paragraph::new("WAVE").style(style(SUB)), middle);
+    if area.width <= 6 {
+        return;
+    }
+    let plot = Rect::new(area.x + 6, area.y, area.width - 6, area.height);
+    if ui.prefs.ascii {
+        for x in 0..plot.width {
+            frame.buffer_mut()[(plot.x + x, middle.y)]
+                .set_symbol("-")
+                .set_style(style(EDGE));
+            let (min, max) = waveform_range(wave, x as usize, plot.width as usize);
+            let y = |value: f32| {
+                ((1.0 - value) * 0.5 * plot.height.saturating_sub(1) as f32).round() as u16
+            };
+            for offset in y(max)..=y(min) {
+                frame.buffer_mut()[(plot.x + x, plot.y + offset)]
+                    .set_symbol(if min == 0.0 && max == 0.0 { "-" } else { "|" })
+                    .set_style(style(CYAN));
+            }
+        }
+    } else {
+        let points = plot.width as usize * 2;
+        frame.render_widget(
+            Canvas::default()
+                .background_color(BG)
+                .marker(Marker::Braille)
+                .x_bounds([0.0, (points - 1) as f64])
+                .y_bounds([-1.0, 1.0])
+                .paint(|context| {
+                    context.draw(&Stroke {
+                        x1: 0.0,
+                        y1: 0.0,
+                        x2: (points - 1) as f64,
+                        y2: 0.0,
+                        color: EDGE,
+                    });
+                    for point in 0..points {
+                        let (min, max) = waveform_range(wave, point, points);
+                        context.draw(&Stroke {
+                            x1: point as f64,
+                            y1: min as f64,
+                            x2: point as f64,
+                            y2: max as f64,
+                            color: CYAN,
+                        });
+                    }
+                }),
+            plot,
         );
     }
 }
@@ -1082,6 +1187,56 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
     use std::time::Instant;
 
+    fn waveform_fixture() -> super::super::spectrum::Waveform {
+        let pcm: Vec<_> = (0..2048)
+            .map(|i| {
+                let time = i as f32;
+                (std::f32::consts::TAU * time / 512.0).sin()
+                    * (0.6 + 0.3 * (std::f32::consts::TAU * time / 2048.0).cos())
+            })
+            .collect();
+        let mut analyzer = thmr_core::audio::Analyzer::default();
+        analyzer.add(&pcm, 48000, 1).unwrap();
+        analyzer.snapshot(2048).waveform.unwrap()
+    }
+
+    #[test]
+    fn waveform_keeps_transients_when_resizing_and_draws_inside_its_strip() {
+        let mut transient = super::super::spectrum::Waveform::default();
+        transient.min[0] = -0.9;
+        transient.max[127] = 0.8;
+        assert_eq!(waveform_range(&transient, 0, 1), (-0.9, 0.8));
+        assert_eq!(waveform_range(&transient, 0, 2), (-0.9, 0.0));
+        assert_eq!(waveform_range(&transient, 1, 2), (0.0, 0.8));
+        for ascii in [false, true] {
+            let mut ui = Ui::new(super::super::model::Preferences {
+                ascii,
+                ..Default::default()
+            });
+            ui.waveform = Some(waveform_fixture());
+            for width in [0, 1, 6, 7, 38, 84, 200] {
+                for height in [0, 1, 2, 3] {
+                    let mut terminal =
+                        Terminal::new(TestBackend::new(width + 6, height + 4)).unwrap();
+                    let area = Rect::new(3, 2, width, height);
+                    terminal.draw(|f| waveform(f, &ui, area)).unwrap();
+                    let buffer = terminal.backend().buffer();
+                    for y in 0..height + 4 {
+                        for x in 0..width + 6 {
+                            let cell = &buffer[(x, y)];
+                            if !area.contains(ratatui::layout::Position::new(x, y)) {
+                                assert_eq!(cell.symbol(), " ");
+                                assert_eq!(cell.bg, Color::Reset);
+                            } else if ascii {
+                                assert!(cell.symbol().is_ascii());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn footer_spectrum_docks_right_or_below_without_covering_controls() {
         let mut state = Snapshot::new("footer-dock".into(), &Default::default());
@@ -1212,11 +1367,24 @@ mod tests {
         let mut ui = Ui::new(super::super::model::Preferences::default());
         ui.sync(&state);
         ui.available = true;
+        ui.waveform = Some(waveform_fixture());
         ui.stage.advance(0.1, &music);
         for (width, height) in [(140, 40), (100, 30), (79, 40), (38, 45)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|f| draw(f, &mut ui, &state, None)).unwrap();
             let buffer = terminal.backend().buffer();
+            let locate = |label: &str| {
+                (0..height)
+                    .find(|y| {
+                        (0..width)
+                            .map(|x| buffer[(x, *y)].symbol())
+                            .collect::<String>()
+                            .replace(' ', "")
+                            .contains(label)
+                    })
+                    .unwrap()
+            };
+            assert!(locate("WAVE") < locate("AUDIO"));
             let content = buffer
                 .content
                 .iter()

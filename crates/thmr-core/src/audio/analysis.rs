@@ -1,7 +1,7 @@
 //! PCM analysis shared by the host and terminal display. No network or playback clock.
 use super::{
     display::{self as spectrum_view, AdaptiveSpectrum},
-    AudioFeature, ChannelLevels, MusicalFeatures, BANDS,
+    AudioFeature, ChannelLevels, MusicalFeatures, Waveform, BANDS, WAVEFORM_POINTS,
 };
 const FFT: usize = 2048;
 /// Detect positive spectral changes before UI smoothing. Counters preserve
@@ -125,6 +125,7 @@ pub struct Analyzer {
     channel_samples: usize,
     channels: usize,
     display: AdaptiveSpectrum,
+    waveform: Waveform,
 }
 impl Default for Analyzer {
     fn default() -> Self {
@@ -141,6 +142,7 @@ impl Default for Analyzer {
             channel_samples: 0,
             channels: 0,
             display: AdaptiveSpectrum::default(),
+            waveform: Waveform::default(),
         }
     }
 }
@@ -187,9 +189,24 @@ impl Analyzer {
                 self.channel_samples = 0;
                 self.hop = 0;
                 let left = std::array::from_fn(|i| self.ring[0][(self.position + i) % FFT]);
+                let right: [f32; FFT] =
+                    std::array::from_fn(|i| self.ring[1][(self.position + i) % FFT]);
+                for bin in 0..WAVEFORM_POINTS {
+                    let start = bin * FFT / WAVEFORM_POINTS;
+                    let end = (bin + 1) * FFT / WAVEFORM_POINTS;
+                    self.waveform.min[bin] = left[start..end]
+                        .iter()
+                        .chain(&right[start..end])
+                        .copied()
+                        .fold(1.0, f32::min);
+                    self.waveform.max[bin] = left[start..end]
+                        .iter()
+                        .chain(&right[start..end])
+                        .copied()
+                        .fold(-1.0, f32::max);
+                }
                 let mut power = fft_power(&left);
                 if channels > 1 {
-                    let right = std::array::from_fn(|i| self.ring[1][(self.position + i) % FFT]);
                     let right = fft_power(&right);
                     for (left, right) in power.iter_mut().zip(right) {
                         *left = (*left + right) * 0.5;
@@ -259,6 +276,7 @@ impl Analyzer {
             display: self.display.frame,
             levels: self.levels,
             music: self.music.features,
+            waveform: Some(self.waveform),
         }
     }
 }
@@ -266,6 +284,32 @@ impl Analyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waveform_follows_fft_position_and_keeps_signed_stereo_extrema() {
+        let mut analyzer = Analyzer::default();
+        analyzer.add(&[0.5; FFT], 48000, 1).unwrap();
+        let first = analyzer.snapshot(FFT as u64);
+        assert_eq!(first.waveform.unwrap().min, [0.5; WAVEFORM_POINTS]);
+        assert_eq!(first.waveform.unwrap().max, [0.5; WAVEFORM_POINTS]);
+        assert!(analyzer.add(&[-0.7; 127], 48000, 1).is_none());
+        let pending = analyzer.snapshot((FFT + 127) as u64);
+        assert_eq!(pending.end_sample, first.end_sample);
+        assert_eq!(pending.waveform.unwrap().min, first.waveform.unwrap().min);
+        analyzer.add(&[-0.7; FFT / 2 - 127], 48000, 1).unwrap();
+        let next = analyzer.snapshot((FFT + FFT / 2) as u64);
+        assert_eq!(next.end_sample, (FFT + FFT / 2) as u64);
+        let wave = next.waveform.unwrap();
+        assert!(wave.min[..WAVEFORM_POINTS / 2].iter().all(|v| *v == 0.5));
+        assert!(wave.max[WAVEFORM_POINTS / 2..].iter().all(|v| *v == -0.7));
+        let opposite: Vec<_> = (0..FFT).flat_map(|_| [0.8, -0.8]).collect();
+        analyzer.add(&opposite, 48000, 2).unwrap();
+        let wave = analyzer.snapshot(FFT as u64).waveform.unwrap();
+        assert_eq!(wave.min, [-0.8; WAVEFORM_POINTS]);
+        assert_eq!(wave.max, [0.8; WAVEFORM_POINTS]);
+        assert!(wave.valid());
+    }
+
     #[test]
     fn channel_levels_preserve_stereo_separation_and_opposite_phase() {
         let mut analyzer = Analyzer::default();
