@@ -136,14 +136,14 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
         let columns = Layout::horizontal([Constraint::Percentage(31), Constraint::Percentage(69)])
             .split(body);
         queue(frame, ui, state, columns[0], connection.is_none());
-        now_playing(frame, ui, state, columns[1]);
+        now_playing(frame, ui, state, columns[1], connection.is_none());
     } else {
         let heights = Layout::vertical([
             Constraint::Min(4),
             Constraint::Length(if body.height >= 20 { 6 } else { 4 }),
         ])
         .split(body);
-        now_playing(frame, ui, state, heights[0]);
+        now_playing(frame, ui, state, heights[0], connection.is_none());
         queue(frame, ui, state, heights[1], connection.is_none());
     }
     controls(frame, ui, state, sections[2]);
@@ -370,17 +370,92 @@ fn queue(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect, connected
         }
     }
 }
-fn now_playing(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect) {
+fn stage_audio_lines(
+    ui: &Ui,
+    state: &Snapshot,
+    connected: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let metrics = ui.stage.audio_metrics();
+    let status = if ui.prefs.motion == Motion::Static {
+        "STATIC"
+    } else if metrics.is_none() {
+        "WAIT"
+    } else if !connected {
+        "HOLD:LINK"
+    } else if !ui.active(state, connected) {
+        "HOLD:STOP"
+    } else if state.volume <= 0.0 {
+        "HOLD:MUTE"
+    } else if ui.overlay.is_some() {
+        "HOLD:MODAL"
+    } else if !ui.available {
+        "HOLD:STALE"
+    } else {
+        "LIVE"
+    };
+    let mut lines = vec![Line::styled(
+        fit(&format!("AUDIO {status}"), width),
+        style(CYAN),
+    )];
+    if ui.prefs.motion == Motion::Static {
+        return lines;
+    }
+    let Some((music, strength)) = metrics else {
+        return lines;
+    };
+    let fields = [
+        format!("LVL {:.3}", music.level),
+        format!("INT {:.3}", music.intensity),
+        format!("DRV {:.3}", strength),
+        format!("LO {:.3}", music.low),
+        format!("MID {:.3}", music.mid),
+        format!("HI {:.3}", music.high),
+        format!("BP {:.3}s", music.beat_period),
+        format!("BC {:.3}", music.beat_confidence),
+        format!("BT {}", music.beats),
+        format!("ACC {}", music.accents),
+        format!("SRG {}", music.surges),
+    ];
+    let mut line = String::new();
+    for field in fields {
+        let field = fit(&field, width);
+        if !line.is_empty()
+            && UnicodeWidthStr::width(line.as_str()) + 2 + UnicodeWidthStr::width(field.as_str())
+                > width
+        {
+            lines.push(Line::styled(std::mem::take(&mut line), style(SUB)));
+        }
+        if !line.is_empty() {
+            line.push_str("  ");
+        }
+        line.push_str(&field);
+    }
+    if !line.is_empty() {
+        lines.push(Line::styled(line, style(SUB)));
+    }
+    lines
+}
+
+fn now_playing(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect, connected: bool) {
     if area.height < 2 {
         return;
     }
     let inner = inside(area);
     frame.render_widget(block("正在放送", false), area);
-    let stage_height = if inner.height >= 6 {
+    let content_height = if inner.height >= 6 {
         inner.height - spectrum_height(inner.height, ui.prefs.motion) - 1
     } else {
         inner.height
     };
+    let audio_lines = stage_audio_lines(ui, state, connected, inner.width as usize);
+    // Keep room for the title, artist and on-air label in short windows.
+    let metrics_height = if content_height >= audio_lines.len() as u16 + 4 {
+        audio_lines.len() as u16
+    } else {
+        0
+    };
+    let stage_height = content_height - metrics_height;
     let stage_area = Rect::new(inner.x, inner.y, inner.width, stage_height);
     ui.stage.viewport(stage_area.width, stage_area.height);
     ui.poster.viewport(stage_area.width, stage_area.height);
@@ -497,6 +572,13 @@ fn now_playing(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect) {
             label_area,
             Line::styled(label, style(VIOLET)),
             label_width,
+        );
+    }
+
+    if metrics_height > 0 {
+        frame.render_widget(
+            Paragraph::new(audio_lines).style(style(SUB)),
+            Rect::new(inner.x, inner.y + stage_height, inner.width, metrics_height),
         );
     }
 
@@ -999,6 +1081,89 @@ mod tests {
                 serde_json::to_vec(&serde_json::json!({"width":buffer.area.width,"height":buffer.area.height,"cells":cells})).unwrap(),
             ).unwrap();
         }
+    }
+
+    #[test]
+    fn stage_audio_panel_shows_consumed_values_and_labels_frozen_or_unused_input() {
+        let mut state = Snapshot::new("metrics-preview".into(), &Default::default());
+        state.phase = Phase::Online;
+        state.station_status =
+            Some(serde_json::json!({"current":{"title":"Audio metrics", "artist":"Fixture"}}));
+        let music = super::super::spectrum::MusicalFeatures {
+            level: 0.321,
+            intensity: 0.765,
+            low: 0.123,
+            mid: 0.456,
+            high: 0.789,
+            beat_period: 0.5,
+            beat_confidence: 0.875,
+            beats: 123,
+            accents: 45,
+            surges: 6,
+        };
+        let mut ui = Ui::new(super::super::model::Preferences::default());
+        ui.sync(&state);
+        ui.available = true;
+        ui.stage.advance(0.1, &music);
+        for (width, height) in [(140, 40), (100, 30), (79, 40), (38, 45)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|f| draw(f, &mut ui, &state, None)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let content = buffer
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
+                .replace(' ', "");
+            for value in [
+                "AUDIO",
+                "LIVE",
+                "LVL 0.321",
+                "INT 0.765",
+                "LO 0.123",
+                "MID 0.456",
+                "HI 0.789",
+                "BP 0.500s",
+                "BC 0.875",
+                "BT 123",
+                "ACC 45",
+                "SRG 6",
+            ] {
+                assert!(
+                    content.contains(&value.replace(' ', "")),
+                    "missing {value} at {width}x{height}"
+                );
+            }
+            assert!(content.contains(&format!("DRV{:.3}", ui.stage.audio_metrics().unwrap().1)));
+            assert!(stage_audio_lines(&ui, &state, true, width as usize)
+                .iter()
+                .all(|line| line.to_string().is_ascii()));
+            capture(buffer, &format!("stage-metrics-{width}x{height}"));
+        }
+        ui.stage.suspend(&super::super::spectrum::MusicalFeatures {
+            beats: 999,
+            ..music
+        });
+        state.user_paused = true;
+        let frozen = stage_audio_lines(&ui, &state, true, 84)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<String>();
+        assert!(frozen.contains("HOLD:STOP"));
+        assert!(frozen.contains("BT 123"));
+        assert!(!frozen.contains("999"));
+        ui.prefs.motion = Motion::Static;
+        let still = stage_audio_lines(&ui, &state, true, 84)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<String>();
+        assert!(still.contains("STATIC"));
+        assert!(!still.contains("0.321"));
+        ui.prefs.motion = Motion::Dynamic;
+        ui.stage = super::super::danmaku::Stage::seeded(7);
+        assert!(stage_audio_lines(&ui, &state, true, 84)[0]
+            .to_string()
+            .contains("WAIT"));
     }
 
     #[test]

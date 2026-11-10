@@ -129,6 +129,7 @@ pub struct Stage {
     laser_in: f32,
     accent_in: f32,
     strength: f32,
+    last_music: Option<MusicalFeatures>,
     beats: u64,
     events: Option<(u64, u64, u64)>,
     beat_pending: bool,
@@ -173,6 +174,7 @@ impl Stage {
             laser_in: 1.0,
             accent_in: 0.0,
             strength: 0.0,
+            last_music: None,
             beats: 0,
             events: None,
             beat_pending: false,
@@ -191,6 +193,12 @@ impl Stage {
 
     pub fn label(&self) -> &'static str {
         self.phrase.primary.label()
+    }
+
+    /// Last input actually consumed by a simulation step, plus the smoothed drive strength.
+    /// Suspension preserves this snapshot instead of exposing newer, unused audio.
+    pub fn audio_metrics(&self) -> Option<(MusicalFeatures, f32)> {
+        self.last_music.map(|music| (music, self.strength))
     }
 
     pub fn viewport(&mut self, width: u16, height: u16) {
@@ -231,6 +239,7 @@ impl Stage {
     }
 
     fn step(&mut self, music: &MusicalFeatures) {
+        self.last_music = Some(*music);
         self.started = true;
         self.time += STEP;
         self.strength += (music.intensity - self.strength) * (1.0 - (-STEP / 0.6).exp());
@@ -765,6 +774,45 @@ impl Stage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_metrics_follow_consumed_steps_and_stay_frozen_during_suspension() {
+        let mut stage = Stage::seeded(7);
+        let first = MusicalFeatures {
+            level: 0.6,
+            intensity: 0.8,
+            beats: 12,
+            ..Default::default()
+        };
+        assert!(stage.audio_metrics().is_none());
+        stage.advance(STEP / 4.0, &first);
+        assert!(stage.audio_metrics().is_none());
+        stage.advance(STEP, &first);
+        let (music, drive) = stage.audio_metrics().unwrap();
+        assert_eq!(
+            serde_json::to_value(music).unwrap(),
+            serde_json::to_value(first).unwrap()
+        );
+        assert!(drive > 0.0 && drive < first.intensity);
+        let next = MusicalFeatures {
+            level: 0.2,
+            intensity: 0.3,
+            beats: 24,
+            ..first
+        };
+        stage.suspend(&next);
+        let (music, strength) = stage.audio_metrics().unwrap();
+        assert_eq!(music.beats, first.beats);
+        assert_eq!(strength, drive);
+        stage.advance(STEP / 4.0, &next);
+        assert_eq!(stage.audio_metrics().unwrap().0.beats, first.beats);
+        stage.advance(STEP, &next);
+        assert_eq!(
+            serde_json::to_value(stage.audio_metrics().unwrap().0).unwrap(),
+            serde_json::to_value(next).unwrap()
+        );
+        assert!(Stage::for_track(7, "next-track").audio_metrics().is_none());
+    }
 
     fn charging_stage(formation: Formation, duration: f32) -> (Stage, MusicalFeatures, usize) {
         let music = MusicalFeatures {
