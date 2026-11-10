@@ -18,7 +18,53 @@ const CYAN: Color = Color::Rgb(131, 227, 219);
 const VIOLET: Color = Color::Rgb(193, 162, 238);
 const BRIGHT: Color = Color::Rgb(245, 251, 255);
 const ERROR: Color = Color::Rgb(255, 164, 168);
-const FOOTER_SIDE_BY_SIDE_WIDTH: u16 = 100;
+const MIN_CONTROL_WIDTH: u16 = 38;
+const MIN_SPECTRUM_WIDTH: u16 = 40;
+
+struct BodyAreas {
+    meter: Option<Rect>,
+    queue: Rect,
+    stage: Rect,
+    split: Option<u16>,
+}
+
+fn body_layout(area: Rect) -> BodyAreas {
+    let (meter, content) = if area.width >= 110 && area.height >= 14 {
+        let columns = Layout::horizontal([Constraint::Length(12), Constraint::Min(80)]).split(area);
+        (Some(columns[0]), columns[1])
+    } else {
+        (None, area)
+    };
+    if content.width >= 80 {
+        let columns = Layout::horizontal([Constraint::Percentage(31), Constraint::Percentage(69)])
+            .split(content);
+        BodyAreas {
+            meter,
+            queue: columns[0],
+            stage: columns[1],
+            split: Some(columns[1].x),
+        }
+    } else {
+        let rows = Layout::vertical([
+            Constraint::Min(4),
+            Constraint::Length(if content.height >= 20 { 6 } else { 4 }),
+        ])
+        .split(content);
+        BodyAreas {
+            meter,
+            queue: rows[1],
+            stage: rows[0],
+            split: None,
+        }
+    }
+}
+
+fn footer_can_align(area: Rect, split: Option<u16>) -> bool {
+    split.is_some_and(|x| {
+        x.saturating_sub(area.x) >= MIN_CONTROL_WIDTH
+            && area.right().saturating_sub(x) >= MIN_SPECTRUM_WIDTH
+    })
+}
 
 fn style(color: Color) -> Style {
     Style::new().fg(color).bg(BG)
@@ -93,7 +139,15 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
         compact(frame, ui, state, area, connection);
         return;
     }
-    let footer_height = if area.width >= FOOTER_SIDE_BY_SIDE_WIDTH {
+    // First evaluate the upper columns with a compact footer; its real divider
+    // includes the optional channel meter and becomes the footer divider too.
+    let candidate_body = body_layout(Rect::new(
+        area.x,
+        area.y + 3,
+        area.width,
+        area.height.saturating_sub(11),
+    ));
+    let footer_height = if footer_can_align(area, candidate_body.split) {
         6
     } else {
         5 + area.height.saturating_sub(14).clamp(2, 5)
@@ -130,29 +184,19 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
         ),
         sections[0],
     );
-    let body = sections[1];
-    let body = if body.width >= 110 && body.height >= 14 {
-        let columns = Layout::horizontal([Constraint::Length(12), Constraint::Min(80)]).split(body);
-        channel_meter(frame, ui, columns[0]);
-        columns[1]
-    } else {
-        body
-    };
-    if body.width >= 80 {
-        let columns = Layout::horizontal([Constraint::Percentage(31), Constraint::Percentage(69)])
-            .split(body);
-        queue(frame, ui, state, columns[0], connection.is_none());
-        now_playing(frame, ui, state, columns[1], connection.is_none());
-    } else {
-        let heights = Layout::vertical([
-            Constraint::Min(4),
-            Constraint::Length(if body.height >= 20 { 6 } else { 4 }),
-        ])
-        .split(body);
-        now_playing(frame, ui, state, heights[0], connection.is_none());
-        queue(frame, ui, state, heights[1], connection.is_none());
+    let body = body_layout(sections[1]);
+    if let Some(meter) = body.meter {
+        channel_meter(frame, ui, meter);
     }
-    let (control_area, spectrum_area) = footer_layout(sections[2]);
+    // Preserve the existing focus order for horizontal and vertical arrangements.
+    if body.split.is_some() {
+        queue(frame, ui, state, body.queue, connection.is_none());
+        now_playing(frame, ui, state, body.stage, connection.is_none());
+    } else {
+        now_playing(frame, ui, state, body.stage, connection.is_none());
+        queue(frame, ui, state, body.queue, connection.is_none());
+    }
+    let (control_area, spectrum_area) = footer_layout(sections[2], body.split);
     controls(frame, ui, state, control_area);
     footer_spectrum(frame, ui, spectrum_area);
     let notice = ui
@@ -700,16 +744,13 @@ fn spectrum_caption(ui: &Ui) -> String {
     }
 }
 
-fn footer_layout(area: Rect) -> (Rect, Rect) {
-    if area.width >= FOOTER_SIDE_BY_SIDE_WIDTH {
-        // Keep all control rows usable while giving the remaining width to the spectrum.
-        let columns = Layout::horizontal([
-            Constraint::Length(58),
-            Constraint::Length(1),
-            Constraint::Min(40),
-        ])
-        .split(area);
-        (columns[0], columns[2])
+fn footer_layout(area: Rect, split: Option<u16>) -> (Rect, Rect) {
+    if footer_can_align(area, split) {
+        let x = split.unwrap();
+        (
+            Rect::new(area.x, area.y, x - area.x, area.height),
+            Rect::new(x, area.y, area.right() - x, area.height),
+        )
     } else {
         let rows = Layout::vertical([Constraint::Length(5), Constraint::Min(2)]).split(area);
         (rows[0], rows[1])
@@ -1243,15 +1284,20 @@ mod tests {
         state.phase = Phase::Online;
         state.station_status =
             Some(serde_json::json!({"current":{"title":"Footer spectrum", "artist":"Fixture"}}));
-        for (width, height) in [
-            (38, 16),
-            (38, 24),
-            (79, 30),
-            (99, 24),
-            (100, 16),
-            (100, 30),
-            (140, 40),
-            (320, 70),
+        for (width, height, aligned) in [
+            (38, 16, false),
+            (38, 24, false),
+            (79, 30, false),
+            (99, 24, false),
+            (100, 16, false),
+            (100, 30, false),
+            (110, 24, false),
+            (110, 25, true),
+            (120, 24, false),
+            (122, 24, true),
+            (140, 16, true),
+            (140, 40, true),
+            (320, 70, true),
         ] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             let mut ui = Ui::new(super::super::model::Preferences::default());
@@ -1278,11 +1324,26 @@ mod tests {
                 .y
                 - 1;
             let footer = Rect::new(0, control_y, width, height - 2 - control_y);
-            let (control_area, spectrum_area) = footer_layout(footer);
-            if width >= FOOTER_SIDE_BY_SIDE_WIDTH {
-                assert!(spectrum_area.x > control_area.right());
+            let stage = ui
+                .hits
+                .iter()
+                .find(|(_, action)| *action == Action::CurrentDetails)
+                .unwrap()
+                .0;
+            let split = (stage.x > ui.queue_rect.x).then_some(stage.x - 1);
+            let (control_area, spectrum_area) = footer_layout(footer, split);
+            assert_eq!(
+                spectrum_area.y == control_area.y,
+                aligned,
+                "layout at {width}x{height}"
+            );
+            if aligned {
+                assert_eq!(spectrum_area.x, stage.x - 1);
+                assert_eq!(spectrum_area.x, ui.queue_rect.right() + 1);
+                assert_eq!(control_area.right(), spectrum_area.x);
                 assert_eq!(spectrum_area.y, control_area.y);
-                assert!(spectrum_area.width >= 40);
+                assert!(control_area.width >= MIN_CONTROL_WIDTH);
+                assert!(spectrum_area.width >= MIN_SPECTRUM_WIDTH);
             } else {
                 assert_eq!(spectrum_area.y, control_area.bottom());
                 assert_eq!(spectrum_area.width, width);
