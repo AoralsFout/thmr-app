@@ -102,7 +102,7 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled(" ☯ THMR", style(CYAN).bold()),
+                Span::styled(" THMR", style(CYAN).bold()),
                 Span::styled(" // GENSOKYO SIGNAL", style(SUB)),
             ]),
             Line::from(format!(
@@ -522,14 +522,17 @@ fn spectrum(frame: &mut Frame, ui: &Ui, area: Rect) {
             row(plot, plot.height / 2),
         );
     } else {
-        let count = (plot.width as usize).div_ceil(2).min(ui.bands.len()).max(1);
+        // Whole-cell bars and one-cell gaps avoid alternating widths after rounding.
+        // Reduce the displayed band count as needed and center the unused columns.
+        let width = plot.width as usize;
+        let stride = (width + 1).div_ceil(ui.bands.len()).max(2);
+        let count = ((width + 1) / stride).max(1);
+        let bar_width = (stride - 1).min(width);
+        let padding = (width - (count * stride - 1)) / 2;
         let partial = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
         for b in 0..count {
-            // The 48 analysis bands are a frequency resolution, not a width
-            // limit. Allocate every bar a proportional slice of the viewport.
-            let left = b * plot.width as usize / count;
-            let right = (b + 1) * plot.width as usize / count;
-            let bar_end = right - usize::from(right - left > 1);
+            let left = padding + b * stride;
+            let bar_end = left + bar_width;
             let start = b * ui.bands.len() / count;
             let end = ((b + 1) * ui.bands.len() / count).max(start + 1);
             let value = ui.bands[start..end].iter().copied().fold(0.0, f32::max);
@@ -1054,6 +1057,57 @@ mod tests {
         assert!(decorated >= 40, "too many empty captures: {decorated}/80");
     }
     #[test]
+    fn spectrum_bars_have_equal_widths_and_gaps() {
+        let mut ui = Ui::new(super::super::model::Preferences::default());
+        ui.available = true;
+        ui.bands.fill(0.5);
+        ui.peaks.fill(0.8);
+        for ascii in [false, true] {
+            ui.prefs.ascii = ascii;
+            for width in 1..=320 {
+                let mut terminal = Terminal::new(TestBackend::new(width + 6, 12)).unwrap();
+                let area = Rect::new(3, 2, width, 8);
+                terminal.draw(|f| spectrum(f, &ui, area)).unwrap();
+                let buffer = terminal.backend().buffer();
+                if [97, 112, 208].contains(&width) && !ascii {
+                    capture(buffer, &format!("equal-bars-{width}"));
+                }
+                let mut bars = Vec::new();
+                let mut x = area.x;
+                while x < area.right() {
+                    if buffer[(x, area.bottom() - 1)].symbol() == " " {
+                        x += 1;
+                        continue;
+                    }
+                    let start = x;
+                    while x < area.right() && buffer[(x, area.bottom() - 1)].symbol() != " " {
+                        x += 1;
+                    }
+                    bars.push(start..x);
+                }
+                assert!(!bars.is_empty());
+                let bar_width = bars[0].len();
+                assert!(
+                    bars.iter().all(|bar| bar.len() == bar_width),
+                    "unequal bar widths at {width} columns, ascii={ascii}: {bars:?}"
+                );
+                assert!(bars.windows(2).all(|pair| pair[1].start - pair[0].end == 1));
+                let left_margin = bars[0].start - area.x;
+                let right_margin = area.right() - bars.last().unwrap().end;
+                assert!(left_margin.abs_diff(right_margin) <= 1);
+                let peak_y = area.bottom() - 7;
+                for x in area.x..area.right() {
+                    assert_eq!(
+                        buffer[(x, peak_y)].symbol() != " ",
+                        buffer[(x, area.bottom() - 1)].symbol() != " ",
+                        "peak width differs at {width} columns, x={x}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn spectrum_spreads_bands_across_wide_and_narrow_viewports() {
         let mut ui = Ui::new(super::super::model::Preferences::default());
         ui.available = true;
@@ -1070,8 +1124,14 @@ mod tests {
                     .rev()
                     .find(|x| buffer[(*x, area.bottom() - 1)].symbol() != " ")
                     .unwrap();
+                let first = (area.x..area.right())
+                    .find(|x| buffer[(*x, area.bottom() - 1)].symbol() != " ")
+                    .unwrap();
+                let bar_width = (first..area.right())
+                    .take_while(|x| buffer[(*x, area.bottom() - 1)].symbol() != " ")
+                    .count() as u16;
                 assert!(
-                    last >= area.right().saturating_sub(2),
+                    last >= area.right().saturating_sub(bar_width + 1),
                     "{width} columns, ascii={ascii}: last painted column is {}, expected near {}",
                     last - area.x,
                     width - 1
@@ -1114,7 +1174,8 @@ mod tests {
         terminal.draw(|f| spectrum(f, &ui, area)).unwrap();
         let buffer = terminal.backend().buffer();
         for y in area.y..area.bottom() {
-            for x in area.x + 40 * area.width / 48..area.right() {
+            // Grouped analysis bands can straddle the cutoff by one displayed bar.
+            for x in area.x + 40 * area.width / 48 + area.width.div_ceil(48)..area.right() {
                 assert_eq!(buffer[(x, y)].symbol(), " ");
             }
         }
