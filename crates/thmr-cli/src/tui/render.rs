@@ -135,10 +135,116 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
     ui.hits.clear();
     ui.focusables.clear();
     ui.queue_rect = Rect::default();
-    if area.width < 38 || area.height < 16 {
+    let minimum_height = if ui.prefs.motion == Motion::Static {
+        14
+    } else {
+        16
+    };
+    if area.width < 38 || area.height < minimum_height {
         compact(frame, ui, state, area, connection);
         return;
     }
+    if ui.prefs.motion == Motion::Static {
+        static_view(frame, ui, state, area, connection);
+    } else {
+        dynamic_view(frame, ui, state, area, connection);
+    }
+    if ui.overlay.is_some() {
+        overlay(frame, ui, state, area);
+    }
+    if !ui.focusables.contains(&ui.focus) {
+        ui.focus = ui.focusables.first().copied().unwrap_or(Action::Queue);
+    }
+    ui.hover = ui.pointer.and_then(|p| ui.hit(p));
+}
+
+fn header_lines(state: &Snapshot, connection: Option<&str>) -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            Span::styled(" THMR", style(CYAN).bold()),
+            Span::styled(" // GENSOKYO SIGNAL", style(SUB)),
+        ]),
+        Line::from(format!(
+            " 东方音乐电台  /  {}{}  /  已收听 {}:{:02}",
+            phase(state, connection.is_none()),
+            if state.volume <= 0.0 {
+                " · 静音"
+            } else {
+                ""
+            },
+            state.listened_sec / 60,
+            state.listened_sec % 60
+        )),
+    ]
+}
+
+fn static_view(
+    frame: &mut Frame,
+    ui: &mut Ui,
+    state: &Snapshot,
+    area: Rect,
+    connection: Option<&str>,
+) {
+    let sections = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Min(3),
+        Constraint::Length(7),
+    ])
+    .split(area);
+    let title = text(state.current().and_then(|track| track.get("title")));
+    let artist = text(state.current().and_then(|track| track.get("artist")));
+    let current = if title.is_empty() {
+        " 等待曲目信息".to_owned()
+    } else if artist.is_empty() {
+        format!(" {title}")
+    } else {
+        format!(" {title} / {artist}")
+    };
+    let mut lines = header_lines(state, connection);
+    let title_style =
+        if ui.focus == Action::CurrentDetails || ui.hover == Some(Action::CurrentDetails) {
+            style(CYAN).bold().underlined()
+        } else {
+            style(CYAN).bold()
+        };
+    lines.push(Line::styled(
+        fit(&current, area.width as usize),
+        title_style,
+    ));
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(style(EDGE)),
+        ),
+        sections[0],
+    );
+    queue(frame, ui, state, sections[1], connection.is_none());
+    ui.hits.push((row(sections[0], 2), Action::CurrentDetails));
+    ui.focusables.push(Action::CurrentDetails);
+    let footer = sections[2];
+    controls(
+        frame,
+        ui,
+        state,
+        Rect::new(footer.x, footer.y, footer.width, 5),
+    );
+    footer_hints(
+        frame,
+        ui,
+        state,
+        Rect::new(footer.x, footer.y + 5, footer.width, 2),
+        connection,
+    );
+}
+
+fn dynamic_view(
+    frame: &mut Frame,
+    ui: &mut Ui,
+    state: &Snapshot,
+    area: Rect,
+    connection: Option<&str>,
+) {
     // First evaluate the upper columns with a compact footer; its real divider
     // includes the optional channel meter and becomes the footer divider too.
     let candidate_body = body_layout(Rect::new(
@@ -160,24 +266,7 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
     ])
     .split(area);
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(" THMR", style(CYAN).bold()),
-                Span::styled(" // GENSOKYO SIGNAL", style(SUB)),
-            ]),
-            Line::from(format!(
-                " 东方音乐电台  /  {}{}  /  已收听 {}:{:02}",
-                phase(state, connection.is_none()),
-                if state.volume <= 0.0 {
-                    " · 静音"
-                } else {
-                    ""
-                },
-                state.listened_sec / 60,
-                state.listened_sec % 60
-            )),
-        ])
-        .block(
+        Paragraph::new(header_lines(state, connection)).block(
             Block::default()
                 .borders(Borders::BOTTOM)
                 .border_style(style(EDGE)),
@@ -199,6 +288,16 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
     let (control_area, spectrum_area) = footer_layout(sections[2], body.split);
     controls(frame, ui, state, control_area);
     footer_spectrum(frame, ui, spectrum_area);
+    footer_hints(frame, ui, state, sections[3], connection);
+}
+
+fn footer_hints(
+    frame: &mut Frame,
+    ui: &Ui,
+    state: &Snapshot,
+    area: Rect,
+    connection: Option<&str>,
+) {
     let notice = ui
         .notice
         .as_deref()
@@ -219,14 +318,7 @@ pub fn draw(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, connection: Option
             style(SUB),
         ),
     ];
-    frame.render_widget(Paragraph::new(lines), sections[3]);
-    if ui.overlay.is_some() {
-        overlay(frame, ui, state, area);
-    }
-    if !ui.focusables.contains(&ui.focus) {
-        ui.focus = ui.focusables.first().copied().unwrap_or(Action::Queue);
-    }
-    ui.hover = ui.pointer.and_then(|p| ui.hit(p));
+    frame.render_widget(Paragraph::new(lines), area);
 }
 fn phase(state: &Snapshot, connected: bool) -> &'static str {
     if !connected {
@@ -1083,12 +1175,12 @@ fn overlay(frame: &mut Frame, ui: &mut Ui, state: &Snapshot, area: Rect) {
             "a 自动音源 · 1/2 指定音源 · b 切换音质 · r 刷新",
             "i 查看正在放送的曲目信息，也可点击当前曲名",
             "m 切换动效：动态 / 静态 · x 切换基础字符",
-            "静态：固定弹幕构图，关闭音频分析和持续动画",
+            "静态：播放信息 / 排播列表 / 控制，隐藏全部音频可视化",
             "动态：8 种队形、12 种构图、5 种节奏独立组合，避免近期重复",
             "重拍由部分敌机领奏，高频短促插入，渐强可提前变奏",
             "暂停、静音或打开详情时弹幕冻结，音频按播放状态继续",
-            "频谱分析当前电台 MP3 流，会额外建立一条流连接",
-            "频谱与播放有独立缓冲，可能存在少量时间偏差",
+            "波形、频谱与舞台共用宿主播放时钟和同一份 PCM",
+            "界面只订阅本地指标，不额外下载电台音频",
             "频谱失败会自动退避重试，播放不受影响",
             "偏好自动保存在 tui.json · Esc 关闭",
             "环境变量 THMR_TUI_ASCII=1 使用基础绘图字符",
@@ -1228,6 +1320,21 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
     use std::time::Instant;
 
+    fn visible_text(buffer: &ratatui::buffer::Buffer) -> String {
+        let mut result = String::new();
+        for y in buffer.area.y..buffer.area.bottom() {
+            let mut x = buffer.area.x;
+            while x < buffer.area.right() {
+                let symbol = buffer[(x, y)].symbol();
+                result.push_str(symbol);
+                // TestBackend does not erase cells covered by a double-width glyph.
+                x += UnicodeWidthStr::width(symbol).max(1) as u16;
+            }
+            result.push('\n');
+        }
+        result
+    }
+
     fn waveform_fixture() -> super::super::spectrum::Waveform {
         let pcm: Vec<_> = (0..2048)
             .map(|i| {
@@ -1239,6 +1346,110 @@ mod tests {
         let mut analyzer = thmr_core::audio::Analyzer::default();
         analyzer.add(&pcm, 48000, 1).unwrap();
         analyzer.snapshot(2048).waveform.unwrap()
+    }
+
+    #[test]
+    fn static_mode_uses_three_full_width_bands_without_audio_visualizations() {
+        let mut state = Snapshot::new("static-preview".into(), &Default::default());
+        state.phase = Phase::Online;
+        state.capabilities.synced_audio = true;
+        state.station_status = Some(serde_json::json!({
+            "current":{"trackId":"live", "title":"Quiet song", "artist":"Artist"},
+            "queue":(1..=24).map(|i| serde_json::json!({"trackId":i, "title":format!("Queue track {i:02}"), "artist":"Artist"})).collect::<Vec<_>>()
+        }));
+        for (width, height) in [(38, 14), (38, 16), (79, 24), (140, 40), (320, 70)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut ui = Ui::new(super::super::model::Preferences::default());
+            ui.sync(&state);
+            ui.available = true;
+            ui.bands.fill(0.9);
+            ui.peaks.fill(1.0);
+            ui.channel_rms.fill(0.6);
+            ui.channel_peaks.fill(0.9);
+            ui.waveform = Some(waveform_fixture());
+            ui.stage.advance(
+                0.1,
+                &super::super::spectrum::MusicalFeatures {
+                    level: 0.6,
+                    intensity: 0.7,
+                    ..Default::default()
+                },
+            );
+            terminal.draw(|f| draw(f, &mut ui, &state, None)).unwrap();
+            ui.prefs.motion = Motion::Static;
+            ui.selected = 15;
+            terminal.draw(|f| draw(f, &mut ui, &state, None)).unwrap();
+            assert_eq!(ui.queue_rect, Rect::new(1, 5, width - 2, height - 13));
+            assert!(
+                ui.selected >= ui.offset && ui.selected < ui.offset + ui.queue_rect.height as usize
+            );
+            assert!(ui.spectrum_source(&state, true).is_none());
+            assert!(!ui.animate(&state, true));
+            let current = ui
+                .hits
+                .iter()
+                .find(|(_, action)| *action == Action::CurrentDetails)
+                .unwrap()
+                .0;
+            assert_eq!(current.y, 2);
+            assert_eq!(
+                ui.hit(ratatui::layout::Position::new(1, 2)),
+                Some(Action::CurrentDetails)
+            );
+            for action in [
+                Action::Play,
+                Action::Stop,
+                Action::Down,
+                Action::Up,
+                Action::Source,
+                Action::Quality,
+                Action::Mode(Motion::Dynamic),
+                Action::Details,
+                Action::Help,
+                Action::Quit,
+            ] {
+                assert!(
+                    ui.hits.iter().any(|(_, candidate)| *candidate == action),
+                    "missing {action:?} at {width}x{height}"
+                );
+            }
+            let buffer = terminal.backend().buffer();
+            let content = visible_text(buffer).replace(' ', "");
+            assert!(content.contains("Quietsong/Artist"));
+            for removed in ["dBFS", "频谱", "WAVE", "AUDIO", "ON AIR"] {
+                assert!(
+                    !content.contains(&removed.replace(' ', "")),
+                    "{removed} remains in static mode"
+                );
+            }
+            capture(buffer, &format!("static-three-bands-{width}x{height}"));
+            // TestBackend retains covered continuation cells; a wide glyph owns both columns.
+            let mut graphics = Vec::new();
+            for y in 0..height {
+                let mut x = 0;
+                while x < width {
+                    let symbol = buffer[(x, y)].symbol();
+                    if symbol.chars().any(|c| {
+                        ('\u{2800}'..='\u{28ff}').contains(&c)
+                            || ('\u{2580}'..='\u{259f}').contains(&c)
+                    }) {
+                        graphics.push((x, y, symbol));
+                    }
+                    x += UnicodeWidthStr::width(symbol).max(1) as u16;
+                }
+            }
+            assert!(
+                graphics.is_empty(),
+                "graphics at {width}x{height}: {graphics:?}"
+            );
+            ui.prefs.motion = Motion::Dynamic;
+            terminal.draw(|f| draw(f, &mut ui, &state, None)).unwrap();
+            if width >= 140 {
+                let content = visible_text(terminal.backend().buffer()).replace(' ', "");
+                assert!(content.contains("dBFS"));
+                assert!(content.contains("频谱"));
+            }
+        }
     }
 
     #[test]
