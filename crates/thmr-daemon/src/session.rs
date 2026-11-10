@@ -1,4 +1,5 @@
 use crate::{
+    audio::{Network, Pipeline},
     mpv::{Mpv, PlaybackEvent},
     server::Envelope,
 };
@@ -25,13 +26,20 @@ pub struct Session {
     online_since: Option<Instant>,
     elapsed: Instant,
     last_open: Option<Instant>,
+    audio: Option<Pipeline>,
+    audio_network: Network,
+    audio_epoch: u64,
+    loaded_epoch: Option<u64>,
+    audio_sequence: u64,
 }
 
 impl Session {
     pub fn new(settings: Settings, path: PathBuf, instance: String) -> Result<Self> {
         let player = Mpv::new(settings.volume)?;
+        let mut state = Snapshot::new(instance, &settings);
+        state.capabilities.synced_audio = true;
         Ok(Self {
-            state: Snapshot::new(instance, &settings),
+            state,
             settings,
             path,
             player,
@@ -42,9 +50,19 @@ impl Session {
             online_since: None,
             elapsed: Instant::now(),
             last_open: None,
+            audio: None,
+            audio_network: Network::new()?,
+            audio_epoch: 0,
+            loaded_epoch: None,
+            audio_sequence: 0,
         })
     }
     fn open(&mut self) -> Result<()> {
+        self.audio.take();
+        self.player.stop()?;
+        self.loaded_epoch = None;
+        self.audio_epoch += 1;
+        self.state.phase = Phase::Connecting;
         if let Some(at) = self
             .last_open
             .filter(|at| at.elapsed() < Duration::from_secs(1))
@@ -57,12 +75,20 @@ impl Session {
         self.state.phase = Phase::Connecting;
         self.connecting_since = Some(Instant::now());
         self.online_since = None;
-        self.player.play(&self.settings.stream_url())
+        self.audio = Some(Pipeline::start(
+            self.audio_network.clone(),
+            self.settings.stream_url(),
+            self.audio_epoch,
+        ));
+        Ok(())
     }
     fn reconnect(&mut self, message: String) {
         if !self.wanted || self.state.user_paused || self.retry.is_some() {
             return;
         }
+        self.audio.take();
+        self.loaded_epoch = None;
+        let _ = self.player.stop();
         self.failures += 1;
         self.state.error = Some(message);
         self.online_since = None;
@@ -108,6 +134,9 @@ impl Session {
                 }
             }
             Command::Pause | Command::Stop | Command::Shutdown | Command::PrepareUpdate => {
+                self.audio.take();
+                self.loaded_epoch = None;
+                self.audio_epoch += 1;
                 self.wanted = false;
                 self.retry = None;
                 self.connecting_since = None;
@@ -241,6 +270,45 @@ impl Session {
             self.elapsed = Instant::now();
         }
     }
+
+    fn audio_tick(&mut self, output: &watch::Sender<thmr_core::audio::AudioFrame>) {
+        self.audio_sequence = self.audio_sequence.wrapping_add(1);
+        if let Some(failure) = self.audio.as_ref().and_then(Pipeline::failure) {
+            self.reconnect(failure.message);
+            if let (Some(at), Some(retry)) = (failure.retry_at, self.retry.as_mut()) {
+                *retry = (*retry).max(at);
+            }
+        }
+        if self.wanted && self.loaded_epoch != Some(self.audio_epoch) {
+            if let Some((stream, format)) = self
+                .audio
+                .as_ref()
+                .and_then(|p| p.format().map(|format| (p.stream(), format)))
+            {
+                match self.player.play(self.audio_epoch, stream, format) {
+                    Ok(()) => self.loaded_epoch = Some(self.audio_epoch),
+                    Err(_) => self.reconnect("shared PCM playback initialization failed".into()),
+                }
+            }
+        }
+        let (position, active) = self.player.audio_clock();
+        let frame = if let Some(pipeline) = &mut self.audio {
+            pipeline.present(
+                &self.state.instance_id,
+                self.audio_sequence,
+                position,
+                active && self.wanted,
+            )
+        } else {
+            let mut frame = thmr_core::audio::AudioFrame::empty(
+                self.state.instance_id.clone(),
+                self.audio_epoch,
+            );
+            frame.sequence = self.audio_sequence;
+            frame
+        };
+        output.send_replace(frame);
+    }
 }
 
 fn enabled_profiles(state: &Snapshot) -> Vec<&str> {
@@ -265,12 +333,15 @@ pub async fn run(
     mut session: Session,
     mut commands: mpsc::Receiver<Envelope>,
     snapshots: watch::Sender<Snapshot>,
+    audio_frames: watch::Sender<thmr_core::audio::AudioFrame>,
     mut media_commands: mpsc::UnboundedReceiver<Command>,
     stop: watch::Sender<bool>,
 ) {
     let http = crate::network::PublicHttp::new().expect("HTTP TLS setup");
     let (meta_tx, mut meta_rx) = mpsc::channel::<Metadata>(4);
     let mut timer = tokio::time::interval(Duration::from_millis(200));
+    let mut audio_timer = tokio::time::interval(Duration::from_millis(20));
+    audio_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut next_meta = Instant::now();
     let mut metadata_not_before = Instant::now();
     let mut metadata_failures = 0u32;
@@ -286,6 +357,7 @@ pub async fn run(
     loop {
         let mut shutdown = false;
         tokio::select! {
+            _ = audio_timer.tick() => { session.audio_tick(&audio_frames); continue; }
             envelope = commands.recv() => {
                 let Some(envelope) = envelope else { break; };
                 let command = envelope.request.command;
@@ -434,6 +506,7 @@ pub async fn run(
     if let Some(task) = probe_task {
         task.abort();
     }
+    session.audio.take();
     let _ = session.player.stop();
     stop.send_replace(true);
 }

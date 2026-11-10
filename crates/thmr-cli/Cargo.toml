@@ -19,3 +19,6 @@ ratatui = { version = "0.30", default-features = false, features = ["crossterm",
 crossterm = "0.29"
 futures-util = "0.3"
 tokio-tungstenite = "0.29"
+serde.workspace = true
+unicode-width = "0.2"
+unicode-segmentation = "1.12"

@@ -2328,10 +2328,13 @@ dependencies = [
  "crossterm",
  "futures-util",
  "ratatui",
+ "serde",
  "serde_json",
  "thmr-core",
  "tokio",
  "tokio-tungstenite",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]
@@ -2358,6 +2361,7 @@ dependencies = [
  "anyhow",
  "axum",
  "block2",
+ "cc",
  "futures-util",
  "httpdate",
  "libloading",

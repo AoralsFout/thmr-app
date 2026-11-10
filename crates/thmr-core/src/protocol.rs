@@ -105,6 +105,8 @@ pub struct Capabilities {
     pub next: bool,
     pub previous: bool,
     pub system_media: bool,
+    #[serde(default)]
+    pub synced_audio: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -161,6 +163,7 @@ impl Snapshot {
                 next: false,
                 previous: false,
                 system_media: false,
+                synced_audio: false,
             },
         }
     }

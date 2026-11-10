@@ -23,6 +23,7 @@ pub struct AppState {
     pub token: String,
     pub commands: mpsc::Sender<Envelope>,
     pub snapshots: watch::Receiver<Snapshot>,
+    pub audio: watch::Receiver<thmr_core::audio::AudioFrame>,
 }
 
 fn error(code: StatusCode, message: impl Into<String>) -> Response {
@@ -128,11 +129,40 @@ async fn events(
     }).into_response()
 }
 
+async fn audio_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !compatible(&headers) {
+        return error(StatusCode::CONFLICT, "incompatible THMR protocol");
+    }
+    ws.on_upgrade(move |mut socket| async move {
+        let mut audio = state.audio.clone();
+        loop {
+            let frame = audio.borrow_and_update().clone();
+            let Ok(text) = serde_json::to_string(&frame) else { break; };
+            if socket.send(Message::Text(text.into())).await.is_err() { break; }
+            loop {
+                tokio::select! {
+                    changed = audio.changed() => { if changed.is_err() { return; } break; }
+                    incoming = socket.next() => match incoming {
+                        Some(Ok(Message::Ping(bytes))) => { if socket.send(Message::Pong(bytes)).await.is_err() { return; } }
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }).into_response()
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/state", get(snapshot))
         .route("/v1/command", post(command))
         .route("/v1/events", get(events))
+        .route("/v1/audio", get(audio_events))
         .layer(axum::extract::DefaultBodyLimit::max(4096))
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
@@ -145,6 +175,8 @@ mod tests {
     async fn control_endpoint_authenticates_http_and_upgrade_and_rejects_browser_and_version() {
         let (commands, _rx) = mpsc::channel(4);
         let (_tx, snapshots) = watch::channel(Snapshot::new("test".into(), &Default::default()));
+        let (_audio_tx, audio) =
+            watch::channel(thmr_core::audio::AudioFrame::empty("test".into(), 0));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let host = tokio::spawn(async move {
@@ -154,12 +186,33 @@ mod tests {
                     token: "secret".into(),
                     commands,
                     snapshots,
+                    audio,
                 }),
             )
             .await
             .unwrap();
         });
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        for path in ["/v1/audio", "/v1/events"] {
+            assert_eq!(
+                http.get(format!("{base}{path}"))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                401
+            );
+            assert_eq!(
+                http.get(format!("{base}{path}"))
+                    .bearer_auth("secret")
+                    .header("Origin", "null")
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                403
+            );
+        }
         assert_eq!(
             http.get(format!("{base}/v1/state"))
                 .send()

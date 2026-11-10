@@ -1,11 +1,67 @@
 //! Private libmpv ABI. The library outlives its handle; all access stays on the actor thread.
+use crate::audio::{Format, PcmStream};
 use anyhow::{bail, Context, Result};
 use libloading::Library;
 use std::{
     ffi::{c_char, c_double, c_int, c_ulong, c_void, CStr, CString},
     path::PathBuf,
     ptr,
+    sync::Mutex,
 };
+
+#[repr(C)]
+struct StreamInfo {
+    cookie: *mut c_void,
+    read: Option<unsafe extern "C" fn(*mut c_void, *mut c_char, u64) -> i64>,
+    seek: Option<unsafe extern "C" fn(*mut c_void, i64) -> i64>,
+    size: Option<unsafe extern "C" fn(*mut c_void) -> i64>,
+    close: Option<unsafe extern "C" fn(*mut c_void)>,
+    cancel: Option<unsafe extern "C" fn(*mut c_void)>,
+}
+type Streams = Mutex<Option<(u64, PcmStream)>>;
+unsafe extern "C" fn stream_read(cookie: *mut c_void, out: *mut c_char, size: u64) -> i64 {
+    if size == 0 {
+        return 0;
+    }
+    if out.is_null() {
+        return -1;
+    }
+    let stream = &*(cookie as *const PcmStream);
+    // libmpv buffers are small; cap each callback and avoid constructing an oversized slice.
+    stream.read(std::slice::from_raw_parts_mut(
+        out.cast(),
+        size.min(65536) as usize,
+    ))
+}
+unsafe extern "C" fn stream_close(cookie: *mut c_void) {
+    drop(Box::from_raw(cookie as *mut PcmStream));
+}
+unsafe extern "C" fn stream_cancel(cookie: *mut c_void) {
+    (&*(cookie as *const PcmStream)).cancel();
+}
+unsafe extern "C" fn stream_open(
+    user: *mut c_void,
+    uri: *mut c_char,
+    info: *mut StreamInfo,
+) -> c_int {
+    let registry = &*(user as *const Streams);
+    let registry = registry.lock().unwrap();
+    let Some((epoch, stream)) = &*registry else {
+        return -13;
+    };
+    if CStr::from_ptr(uri).to_bytes() != format!("thmrpcm://{epoch}").as_bytes() {
+        return -13;
+    }
+    *info = StreamInfo {
+        cookie: Box::into_raw(Box::new(stream.clone())).cast(),
+        read: Some(stream_read),
+        seek: None,
+        size: None,
+        close: Some(stream_close),
+        cancel: Some(stream_cancel),
+    };
+    0
+}
 
 type Handle = c_void;
 #[repr(C)]
@@ -41,6 +97,9 @@ pub struct Mpv {
     free: unsafe extern "C" fn(*mut c_void),
     wait: unsafe extern "C" fn(*mut Handle, c_double) -> *mut Event,
     destroy: unsafe extern "C" fn(*mut Handle),
+    option: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
+    get_native: unsafe extern "C" fn(*mut Handle, *const c_char, c_int, *mut c_void) -> c_int,
+    streams: Box<Streams>,
     _library: Library,
     active_entry: Option<i64>,
     wanted: bool,
@@ -107,6 +166,13 @@ impl Mpv {
             let free = *library.get(b"mpv_free\0")?;
             let wait = *library.get(b"mpv_wait_event\0")?;
             let destroy = *library.get(b"mpv_terminate_destroy\0")?;
+            let get_native = *library.get(b"mpv_get_property\0")?;
+            let register = *library.get::<unsafe extern "C" fn(
+                *mut Handle,
+                *const c_char,
+                *mut c_void,
+                unsafe extern "C" fn(*mut c_void, *mut c_char, *mut StreamInfo) -> c_int,
+            ) -> c_int>(b"mpv_stream_cb_add_ro\0")?;
             let handle = create();
             if handle.is_null() {
                 bail!("could not create libmpv handle");
@@ -118,6 +184,9 @@ impl Mpv {
                 free,
                 wait,
                 destroy,
+                option,
+                get_native,
+                streams: Box::new(Mutex::new(None)),
                 _library: library,
                 active_entry: None,
                 wanted: false,
@@ -133,6 +202,10 @@ impl Mpv {
                 ("input-vo-keyboard", "no"),
                 ("cache", "yes"),
                 ("demuxer-max-bytes", "2097152"),
+                ("cache-secs", "1"),
+                ("cache-pause-wait", "0.5"),
+                ("demuxer", "rawaudio"),
+                ("demuxer-rawaudio-format", "floatle"),
                 ("network-timeout", "10"),
                 ("user-agent", "THMR-Client/1.0 (+https://thmr.yunmoan.cn)"),
             ] {
@@ -150,24 +223,13 @@ impl Mpv {
                     bail!("invalid THMR_AUDIO_OUTPUT");
                 }
             }
-            if let Ok(token) = std::env::var("THMR_STREAM_TOKEN") {
-                if !token.is_empty() {
-                    if token.contains(['\r', '\n', ',']) {
-                        bail!("invalid stream authentication header");
-                    }
-                    if option(
-                        handle,
-                        c"http-header-fields".as_ptr(),
-                        CString::new(format!("X-Stream-Token: {token}"))?.as_ptr(),
-                    ) < 0
-                    {
-                        bail!("cannot set stream authentication");
-                    }
-                }
-            }
             let code = initialize(handle);
             if code < 0 {
                 bail!("libmpv initialization failed ({code})");
+            }
+            let registry = (&*player.streams as *const Streams).cast_mut().cast();
+            if register(handle, c"thmrpcm".as_ptr(), registry, stream_open) < 0 {
+                bail!("libmpv cannot register the shared PCM input");
             }
             player.command(&["set", "volume", &volume.to_string()])?;
             Ok(player)
@@ -190,17 +252,43 @@ impl Mpv {
         }
         Ok(())
     }
-    pub fn play(&mut self, url: &str) -> Result<()> {
+    pub fn play(&mut self, epoch: u64, stream: PcmStream, format: Format) -> Result<()> {
+        self.stop()?;
         self.wanted = false;
-        self.command(&["stop"])?;
-        self.drain();
         self.active_entry = None;
         self.loaded = false;
-        self.command(&["loadfile", url, "replace"])?;
+        for (name, value) in [
+            ("demuxer-rawaudio-rate", format.rate.to_string()),
+            (
+                "demuxer-rawaudio-channels",
+                if format.channels == 1 {
+                    "mono"
+                } else {
+                    "stereo"
+                }
+                .into(),
+            ),
+        ] {
+            let code = unsafe {
+                (self.option)(
+                    self.handle,
+                    CString::new(name)?.as_ptr(),
+                    CString::new(value)?.as_ptr(),
+                )
+            };
+            if code < 0 {
+                bail!("libmpv PCM option {name} failed ({code})");
+            }
+        }
+        *self.streams.lock().unwrap() = Some((epoch, stream));
+        self.command(&["loadfile", &format!("thmrpcm://{epoch}"), "replace"])?;
         self.wanted = true;
         Ok(())
     }
     pub fn stop(&mut self) -> Result<()> {
+        if let Some((_, stream)) = self.streams.lock().unwrap().take() {
+            stream.cancel();
+        }
         self.wanted = false;
         self.loaded = false;
         self.active_entry = None;
@@ -210,6 +298,23 @@ impl Mpv {
     }
     pub fn volume(&self, value: f64) -> Result<()> {
         self.command(&["set", "volume", &value.to_string()])
+    }
+    pub fn audio_clock(&self) -> (Option<f64>, bool) {
+        let mut position = 0.0f64;
+        let code = unsafe {
+            (self.get_native)(
+                self.handle,
+                c"audio-pts".as_ptr(),
+                5,
+                (&mut position as *mut f64).cast(),
+            )
+        };
+        let position = (code >= 0 && position.is_finite()).then_some(position);
+        let active = self.wanted
+            && self.loaded
+            && self.property(c"paused-for-cache").as_deref() != Some("yes")
+            && self.property(c"core-idle").as_deref() == Some("no");
+        (position, active)
     }
     fn property(&self, name: &CStr) -> Option<String> {
         let p = unsafe { (self.get_string)(self.handle, name.as_ptr()) };
@@ -279,6 +384,9 @@ impl Mpv {
 }
 impl Drop for Mpv {
     fn drop(&mut self) {
+        if let Some((_, stream)) = self.streams.lock().unwrap().take() {
+            stream.cancel();
+        }
         unsafe { (self.destroy)(self.handle) };
     }
 }

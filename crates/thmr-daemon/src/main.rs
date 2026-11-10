@@ -1,3 +1,4 @@
+mod audio;
 mod mpv;
 mod native;
 mod network;
@@ -77,6 +78,8 @@ fn run() -> Result<()> {
             let mut session = session::Session::new(settings, path, instance.clone())?;
             session.state.capabilities.system_media = system_media;
             let (snapshots, snapshot_rx) = watch::channel(session.state.clone());
+            let (audio_frames, audio_rx) =
+                watch::channel(thmr_core::audio::AudioFrame::empty(instance.clone(), 0));
             let (commands, command_rx) = mpsc::channel(64);
             let (stop, mut stop_rx) = watch::channel(false);
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -91,6 +94,7 @@ fn run() -> Result<()> {
                 token: endpoint.token.clone(),
                 commands,
                 snapshots: snapshot_rx.clone(),
+                audio: audio_rx,
             });
             let server = tokio::spawn(async move {
                 axum::serve(listener, app)
@@ -116,7 +120,7 @@ fn run() -> Result<()> {
                     }
                 }
             });
-            session::run(session, command_rx, snapshots, media_rx, stop).await;
+            session::run(session, command_rx, snapshots, audio_frames, media_rx, stop).await;
             update.abort();
             // Open WebSockets must not indefinitely hold the process during shutdown.
             let _ = tokio::time::timeout(std::time::Duration::from_millis(500), server).await;

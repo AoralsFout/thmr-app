@@ -1,48 +1,66 @@
+mod battlefield;
+mod choreography;
+mod danmaku;
+mod model;
+mod render;
+mod spectrum;
+mod spectrum_view;
+mod timing;
+
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use futures_util::StreamExt;
-use ratatui::{
-    layout::{Constraint, Layout},
-    style::{Color, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
-    Frame,
+use crossterm::{
+    event::{
+        self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
+        Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    },
+    execute,
 };
+use futures_util::StreamExt;
+use model::{Action, Overlay, Preferences, Ui};
+use ratatui::layout::Position;
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use thmr_core::{
     client::Client,
     protocol::{Command, Snapshot},
     PROTOCOL_VERSION,
 };
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue};
 
-#[derive(Default)]
 struct View {
-    state: Option<Snapshot>,
-    notice: Option<String>,
+    state: Snapshot,
+    connection: Option<String>,
 }
 struct Restore;
 impl Drop for Restore {
     fn drop(&mut self) {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
         ratatui::restore();
     }
+}
+struct Request {
+    id: u64,
+    command: Command,
+}
+struct Reply {
+    id: u64,
+    result: std::result::Result<(), String>,
 }
 
 pub async fn run(client: Client) -> Result<()> {
     let view = Arc::new(Mutex::new(View {
-        state: Some(client.snapshot().await?),
-        notice: None,
+        state: client.snapshot().await?,
+        connection: None,
     }));
-    let reader_view = view.clone();
-    let task = tokio::spawn(async move {
+    let reader = view.clone();
+    let subscribe_task = tokio::spawn(async move {
         let mut client = client;
         loop {
-            if let Err(error) = subscribe(&client, &reader_view).await {
-                reader_view.lock().unwrap().notice =
-                    Some(format!("连接中断：{error}；正在重新连接"));
+            if subscribe(&client, &reader).await.is_err() {
+                reader.lock().unwrap().connection = Some("主机连接中断，正在重连".into());
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
             if let Ok(reconnected) = Client::discover().await {
@@ -50,82 +68,332 @@ pub async fn run(client: Client) -> Result<()> {
             }
         }
     });
-    let input_view = view.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<()> {
-        let mut terminal = ratatui::try_init()?;
-        let _restore = Restore;
-        loop {
-            if input_view
-                .lock()
-                .unwrap()
-                .state
-                .as_ref()
-                .is_some_and(|s| s.shutdown_reason.as_deref() == Some("update"))
+    let (command_tx, mut command_rx) = mpsc::channel::<Request>(32);
+    let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<Reply>();
+    let command_view = view.clone();
+    let commands = tokio::spawn(async move {
+        while let Some(request) = command_rx.recv().await {
+            // Serial execution preserves toggle/source order. Mutations are never retried:
+            // an interrupted response can still mean the host executed the command.
+            let result = async { Client::discover().await?.execute(request.command).await }.await;
+            let result = match result {
+                Ok(state) => {
+                    merge_snapshot(&mut command_view.lock().unwrap(), state);
+                    Ok(())
+                }
+                Err(_) => Err("操作未能确认，请检查主机状态后重试".into()),
+            };
+            if reply_tx
+                .send(Reply {
+                    id: request.id,
+                    result,
+                })
+                .is_err()
             {
                 break;
             }
-            terminal.draw(|frame| draw(frame, &input_view.lock().unwrap()))?;
-            if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind != KeyEventKind::Press {
-                        continue;
-                    }
-                    if key.code == KeyCode::Char('q')
-                        || (key.code == KeyCode::Char('c')
-                            && key.modifiers.contains(KeyModifiers::CONTROL))
-                    {
-                        break;
-                    }
-                    let state = input_view.lock().unwrap().state.clone();
-                    let command = match key.code {
-                        KeyCode::Char(' ') => Some(Command::Toggle),
-                        KeyCode::Char('s') => Some(Command::Stop),
-                        KeyCode::Char('r') => Some(Command::Refresh),
-                        KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right => {
-                            state.as_ref().map(|s| Command::SetVolume {
-                                value: (s.volume + 2.0).min(100.0),
-                            })
+        }
+    });
+    let (spectrum_tx, spectrum_rx) = watch::channel(None);
+    let audio = Arc::new(Mutex::new(spectrum::Spectrum::default()));
+    let spectrum_task = tokio::spawn(spectrum::run(spectrum_rx, audio.clone()));
+    let result = tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut terminal = ratatui::try_init()?;
+        let _restore = Restore;
+        execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange)?;
+        let mut ui = Ui::new(Preferences::load());
+        let mut sequence = 0u64;
+        let mut last_frame = Instant::now() - Duration::from_secs(1);
+        let mut last_state = (String::new(), u64::MAX, None);
+        let mut dirty = true;
+        let mut timing = timing::Trace::new();
+        let mut audio_position: (u64, u64);
+        loop {
+            let (state, connection) = {
+                let view = view.lock().unwrap();
+                (view.state.clone(), view.connection.clone())
+            };
+            if state.shutdown_reason.as_deref() == Some("update") {
+                break;
+            }
+            let identity = (
+                state.instance_id.clone(),
+                state.revision,
+                connection.clone(),
+            );
+            if identity != last_state {
+                ui.sync(&state);
+                last_state = identity;
+                dirty = true;
+            }
+            while let Ok(reply) = reply_rx.try_recv() {
+                ui.pending = ui.pending.saturating_sub(1);
+                if ui.pending_volume.is_some_and(|(id, _)| id == reply.id) {
+                    ui.pending_volume = None;
+                }
+                ui.notice = reply.result.err();
+                dirty = true;
+            }
+            let source = ui.spectrum_source(&state, connection.is_none());
+            spectrum_tx.send_if_modified(|current| {
+                if *current != source {
+                    *current = source;
+                    true
+                } else {
+                    false
+                }
+            });
+            {
+                let audio = audio.lock().unwrap();
+                if audio.instance_id.is_empty() || audio.instance_id == state.instance_id {
+                    ui.tick(&state, connection.is_none(), &audio);
+                    audio_position = (audio.epoch, audio.end_sample);
+                } else {
+                    ui.tick(&state, connection.is_none(), &spectrum::Spectrum::default());
+                    audio_position = (0, 0);
+                }
+            }
+            let animated = ui.animate(&state, connection.is_none());
+            let frame_time = if animated {
+                Duration::from_millis(33)
+            } else {
+                Duration::from_millis(250)
+            };
+            if dirty || last_frame.elapsed() >= frame_time {
+                terminal
+                    .draw(|frame| render::draw(frame, &mut ui, &state, connection.as_deref()))?;
+                if let Some(timing) = &mut timing {
+                    timing.draw(audio_position.0, audio_position.1);
+                }
+                last_frame = Instant::now();
+                dirty = false;
+            }
+            // Wake at the next frame deadline even when keyboard events arrive.
+            let wait = frame_time
+                .saturating_sub(last_frame.elapsed())
+                .min(Duration::from_millis(33));
+            if event::poll(wait)? {
+                let event = event::read()?;
+                if quit_event(&event) {
+                    break;
+                }
+                let old_hover = ui.hover;
+                let action = action(&event, &mut ui);
+                if matches!(event, Event::Resize(..)) {
+                    dirty = true;
+                }
+                if let Some(action) = action {
+                    dirty = true;
+                    match action {
+                        Action::Quit => break,
+                        Action::Queue => {
+                            ui.focus = Action::Queue;
                         }
-                        KeyCode::Char('-') | KeyCode::Left => {
-                            state.as_ref().map(|s| Command::SetVolume {
-                                value: (s.volume - 2.0).max(0.0),
-                            })
+                        Action::Select(index) => {
+                            ui.selected = index.min(ui.tracks.len().saturating_sub(1));
+                            ui.focus = Action::Queue;
+                            ui.ensure_visible();
                         }
-                        KeyCode::Char('1') => Some(Command::SetSource {
-                            source: "source1".into(),
-                        }),
-                        KeyCode::Char('2') => Some(Command::SetSource {
-                            source: "source2".into(),
-                        }),
-                        KeyCode::Char('a') => Some(Command::SetSource {
-                            source: "auto".into(),
-                        }),
-                        KeyCode::Char('b') => state
-                            .as_ref()
-                            .and_then(next_profile)
-                            .map(|profile_id| Command::SetProfile { profile_id }),
-                        _ => None,
-                    };
-                    if let Some(command) = command {
-                        let result = tokio::runtime::Handle::current()
-                            .block_on(async { Client::discover().await?.execute(command).await });
-                        let mut view = input_view.lock().unwrap();
-                        match result {
-                            Ok(state) => {
-                                view.state = Some(state);
-                                view.notice = None;
+                        Action::Details => {
+                            if !ui.tracks.is_empty() {
+                                ui.modal(Overlay::Details);
                             }
-                            Err(error) => view.notice = Some(error.to_string()),
+                        }
+                        Action::CurrentDetails => ui.modal(Overlay::CurrentDetails),
+                        Action::Help => ui.modal(Overlay::Help),
+                        Action::Close => {
+                            ui.overlay = None;
+                            ui.overlay_scroll = 0;
+                            ui.focus = Action::Queue;
+                        }
+                        Action::Mode(mode) => ui.change_mode(mode),
+                        _ => {
+                            if let Some(command) = ui.command(action, &state) {
+                                sequence += 1;
+                                let volume = if let Command::SetVolume { value } = &command {
+                                    Some(*value)
+                                } else {
+                                    None
+                                };
+                                if command_tx
+                                    .try_send(Request {
+                                        id: sequence,
+                                        command,
+                                    })
+                                    .is_ok()
+                                {
+                                    ui.pending += 1;
+                                    ui.notice = None;
+                                    if let Some(value) = volume {
+                                        ui.pending_volume = Some((sequence, value));
+                                        ui.pulse_until =
+                                            Some(Instant::now() + Duration::from_millis(150));
+                                    }
+                                } else {
+                                    ui.notice = Some("操作较密集，请稍后再试".into());
+                                }
+                            }
                         }
                     }
+                } else if matches!(
+                    event,
+                    Event::Key(_)
+                        | Event::Mouse(event::MouseEvent {
+                            kind: MouseEventKind::ScrollUp | MouseEventKind::ScrollDown,
+                            ..
+                        })
+                ) || ui.hover != old_hover
+                {
+                    dirty = true;
                 }
             }
         }
         Ok(())
     })
-    .await?;
-    task.abort();
-    result
+    .await;
+    subscribe_task.abort();
+    commands.abort();
+    spectrum_task.abort();
+    result?
+}
+
+fn quit_event(event: &Event) -> bool {
+    matches!(event,Event::Key(key) if key.kind!=KeyEventKind::Release && ((key.code==KeyCode::Char('c')&&key.modifiers.contains(KeyModifiers::CONTROL))||key.code==KeyCode::Char('q')))
+}
+fn action(event: &Event, ui: &mut Ui) -> Option<Action> {
+    match event {
+        Event::Key(key) if key.kind != KeyEventKind::Release => {
+            if ui.overlay.is_some() {
+                return match key.code {
+                    KeyCode::Esc | KeyCode::Char('?') => Some(Action::Close),
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        ui.scroll_overlay(-1);
+                        None
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        ui.scroll_overlay(1);
+                        None
+                    }
+                    KeyCode::PageUp => {
+                        ui.scroll_overlay(-8);
+                        None
+                    }
+                    KeyCode::PageDown => {
+                        ui.scroll_overlay(8);
+                        None
+                    }
+                    KeyCode::Enter if ui.focus == Action::Close => Some(Action::Close),
+                    _ => None,
+                };
+            }
+            match key.code {
+                KeyCode::Tab => {
+                    ui.tab(key.modifiers.contains(KeyModifiers::SHIFT));
+                    None
+                }
+                KeyCode::BackTab => {
+                    ui.tab(true);
+                    None
+                }
+                KeyCode::Char(' ') => Some(Action::Play),
+                KeyCode::Char('s') => Some(Action::Stop),
+                KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right => Some(Action::Up),
+                KeyCode::Char('-') | KeyCode::Left => Some(Action::Down),
+                KeyCode::Char('a') => Some(Action::SourceNamed("auto")),
+                KeyCode::Char('1') => Some(Action::SourceNamed("source1")),
+                KeyCode::Char('2') => Some(Action::SourceNamed("source2")),
+                KeyCode::Char('m') => Some(Action::Mode(ui.prefs.motion.next())),
+                KeyCode::Char('x') => {
+                    ui.prefs.ascii = !ui.prefs.ascii;
+                    if ui.prefs.save().is_err() {
+                        ui.notice = Some("无法保存界面偏好".into());
+                    }
+                    None
+                }
+                KeyCode::Char('?') | KeyCode::F(1) => Some(Action::Help),
+                KeyCode::Char('r') => Some(Action::Refresh),
+                KeyCode::Char('i') => Some(Action::CurrentDetails),
+                KeyCode::Char('b') => Some(Action::Quality),
+                KeyCode::Enter => Some(if ui.focus == Action::Queue {
+                    Action::Details
+                } else {
+                    ui.focus
+                }),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    ui.select(-1);
+                    None
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    ui.select(1);
+                    None
+                }
+                KeyCode::PageUp => {
+                    ui.select(-(ui.queue_rect.height.max(1) as isize));
+                    None
+                }
+                KeyCode::PageDown => {
+                    ui.select(ui.queue_rect.height.max(1) as isize);
+                    None
+                }
+                KeyCode::Home => {
+                    ui.select(-(ui.selected as isize));
+                    None
+                }
+                KeyCode::End => {
+                    ui.select(ui.tracks.len() as isize);
+                    None
+                }
+                _ => None,
+            }
+        }
+        Event::Mouse(mouse) => {
+            let position = Position::new(mouse.column, mouse.row);
+            match mouse.kind {
+                MouseEventKind::Moved => {
+                    ui.pointer = Some(position);
+                    ui.hover = ui.hit(position);
+                    None
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    ui.pointer = Some(position);
+                    let action = ui.hit(position);
+                    if ui.overlay.is_some() && action != Some(Action::Close) {
+                        return None;
+                    }
+                    if let Some(action) = action {
+                        ui.focus = if matches!(action, Action::Select(_)) {
+                            Action::Queue
+                        } else {
+                            action
+                        };
+                    }
+                    action
+                }
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                    let delta = if mouse.kind == MouseEventKind::ScrollUp {
+                        -3
+                    } else {
+                        3
+                    };
+                    if ui.overlay.is_some() {
+                        ui.scroll_overlay(delta);
+                    } else if ui.queue_rect.contains(position) {
+                        ui.select(delta as isize);
+                    }
+                    None
+                }
+                // Deliberately ignore every drag and button-release event.
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn merge_snapshot(view: &mut View, state: Snapshot) {
+    if state.instance_id != view.state.instance_id || state.revision >= view.state.revision {
+        view.state = state;
+    }
 }
 async fn subscribe(client: &Client, view: &Arc<Mutex<View>>) -> Result<()> {
     let mut request = client
@@ -144,151 +412,65 @@ async fn subscribe(client: &Client, view: &Arc<Mutex<View>>) -> Result<()> {
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await?;
     while let Some(message) = socket.next().await {
         if let tokio_tungstenite::tungstenite::Message::Text(text) = message? {
-            let snapshot: Snapshot = serde_json::from_str(&text)?;
-            if snapshot.protocol_version != PROTOCOL_VERSION {
+            let state: Snapshot = serde_json::from_str(&text)?;
+            if state.protocol_version != PROTOCOL_VERSION {
                 anyhow::bail!("incompatible host protocol");
             }
             let mut view = view.lock().unwrap();
-            view.state = Some(snapshot);
-            view.notice = None;
+            merge_snapshot(&mut view, state);
+            view.connection = None;
         }
     }
     anyhow::bail!("host disconnected")
 }
-fn next_profile(state: &Snapshot) -> Option<String> {
-    let profiles: Vec<&str> = state
-        .station_status
-        .as_ref()?
-        .pointer("/station/bitrates")?
-        .as_array()?
-        .iter()
-        .filter(|p| p.get("enabled").and_then(|v| v.as_bool()) != Some(false))
-        .filter_map(|p| p.get("id")?.as_str())
-        .collect();
-    if profiles.is_empty() {
-        return None;
-    }
-    let current = profiles
-        .iter()
-        .position(|id| *id == state.profile_id)
-        .unwrap_or(0);
-    Some(profiles[(current + 1) % profiles.len()].into())
-}
-fn draw(frame: &mut Frame, view: &View) {
-    let areas = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Length(7),
-        Constraint::Min(3),
-        Constraint::Length(4),
-    ])
-    .split(frame.area());
-    let accent = Color::Rgb(223, 145, 161);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("THMR", Style::new().fg(accent).bold()),
-            Span::raw("  东方音乐电台 / Touhou Music Radio"),
-        ]))
-        .block(Block::default().borders(Borders::ALL)),
-        areas[0],
-    );
-    let Some(state) = &view.state else {
-        return;
-    };
-    let current = state.current();
-    let title = current
-        .and_then(|c| c.get("title"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("等待曲目信息");
-    let artist = current
-        .and_then(|c| c.get("artist"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let phase = match state.phase {
-        thmr_core::protocol::Phase::Idle => {
-            if state.user_paused {
-                "已暂停"
-            } else {
-                "已停止"
-            }
-        }
-        thmr_core::protocol::Phase::Online => "正在播放",
-        thmr_core::protocol::Phase::Connecting => "连接中",
-        thmr_core::protocol::Phase::Buffering => "缓冲中",
-        thmr_core::protocol::Phase::Reconnecting => "重连中",
-    };
-    let now = vec![
-        Line::styled(title, Style::new().fg(accent).bold()),
-        Line::from(artist),
-        Line::from(""),
-        Line::from(format!(
-            "{phase}  ·  {} / {}  ·  音量 {:.0}%  ·  已收听 {}:{:02}",
-            state.source,
-            state.profile_id,
-            state.volume,
-            state.listened_sec / 60,
-            state.listened_sec % 60
-        )),
-    ];
-    frame.render_widget(
-        Paragraph::new(now)
-            .wrap(Wrap { trim: false })
-            .block(Block::default().title(" 正在放送 ").borders(Borders::ALL)),
-        areas[1],
-    );
-    let queue: Vec<ListItem> = state
-        .station_status
-        .as_ref()
-        .and_then(|s| s.get("queue"))
-        .and_then(|q| q.as_array())
-        .into_iter()
-        .flatten()
-        .take(30)
-        .map(|track| {
-            ListItem::new(format!(
-                "{}  —  {}",
-                track.get("title").and_then(|v| v.as_str()).unwrap_or(""),
-                track.get("artist").and_then(|v| v.as_str()).unwrap_or("")
-            ))
-        })
-        .collect();
-    frame.render_widget(
-        List::new(queue).block(
-            Block::default()
-                .title(" 电台排播（只读） ")
-                .borders(Borders::ALL),
-        ),
-        areas[2],
-    );
-    let notice = view
-        .notice
-        .as_ref()
-        .or(state.error.as_ref())
-        .or(state.metadata_error.as_ref())
-        .map(String::as_str)
-        .unwrap_or("q 退出界面，后台播放继续");
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from("空格 播放/暂停  s 停止  +/- 音量  1/2/a 来源  b 码率  r 刷新"),
-            Line::styled(notice, Style::new().fg(accent)),
-        ])
-        .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL)),
-        areas[3],
-    );
-}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn terminal_renders_chinese_and_handles_small_windows() {
-        use ratatui::{backend::TestBackend, Terminal};
-        let view = View {
-            state: Some(Snapshot::new("test".into(), &Default::default())),
-            notice: None,
-        };
-        for (w, h) in [(100, 30), (30, 8), (10, 3)] {
-            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-            terminal.draw(|f| draw(f, &view)).unwrap();
+    fn mouse_drag_cannot_trigger_a_volume_command() {
+        let mut ui = Ui::new(Preferences::default());
+        ui.hits
+            .push((ratatui::layout::Rect::new(1, 1, 10, 1), Action::Up));
+        for kind in [
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            let event = Event::Mouse(event::MouseEvent {
+                kind,
+                column: 3,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert_eq!(action(&event, &mut ui), None);
         }
+        let event = Event::Mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(action(&event, &mut ui), Some(Action::Up));
+    }
+    #[test]
+    fn older_command_response_cannot_replace_newer_snapshot() {
+        let mut state = Snapshot::new("test".into(), &Default::default());
+        state.revision = 8;
+        let mut view = View {
+            state: state.clone(),
+            connection: None,
+        };
+        state.revision = 7;
+        state.volume = 2.0;
+        merge_snapshot(&mut view, state);
+        assert_eq!(view.state.revision, 8);
+        assert_ne!(view.state.volume, 2.0);
+    }
+    #[test]
+    fn modal_blocks_playback_actions_and_background_mouse_hits() {
+        let mut ui = Ui::new(Preferences::default());
+        ui.modal(Overlay::Help);
+        let event = Event::Key(event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(action(&event, &mut ui), None);
     }
 }

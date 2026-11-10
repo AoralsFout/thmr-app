@@ -23,6 +23,8 @@ class TerminalPackaging(unittest.TestCase):
             (root / 'docs').mkdir()
             (root / 'docs/TERMINAL.md').write_text('terminal instructions')
             native.mkdir()
+            (root / 'native/vendor/minimp3').mkdir(parents=True)
+            (root / 'native/vendor/minimp3/LICENSE').write_text('minimp3 CC0')
             bundle.mkdir()
             for name in ['thmr.exe', 'thmrd.exe']:
                 (native / name).write_bytes(name.encode())
@@ -32,11 +34,14 @@ class TerminalPackaging(unittest.TestCase):
                 output = package.stage('windows', bundle, native)
                 self.assertEqual((output / 'bin/libmpv-2.dll').read_bytes(), b'pinned mpv')
                 self.assertFalse((output / 'flutter_windows.dll').exists())
+                self.assertEqual((output / 'licenses/minimp3/LICENSE').read_text(), 'minimp3 CC0')
+                self.assertEqual((bundle / 'licenses/minimp3/LICENSE').read_text(), 'minimp3 CC0')
                 self.assertEqual(json.loads((output / 'native-version.json').read_text())['protocolVersion'], 1)
                 archive = package.archive('windows')
                 with zipfile.ZipFile(archive) as files:
                     self.assertIn('bin/thmr.exe', files.namelist())
                     self.assertIn('bin/libmpv-2.dll', files.namelist())
+                    self.assertIn('licenses/minimp3/LICENSE', files.namelist())
 
     def test_linux_root_command_is_cli_and_gui_launcher_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -46,6 +51,8 @@ class TerminalPackaging(unittest.TestCase):
             (root / 'docs').mkdir()
             (root / 'docs/TERMINAL.md').write_text('terminal instructions')
             native.mkdir()
+            (root / 'native/vendor/minimp3').mkdir(parents=True)
+            (root / 'native/vendor/minimp3/LICENSE').write_text('minimp3 CC0')
             bundle.mkdir()
             for name in ['thmr', 'thmrd']:
                 (native / name).write_bytes(name.encode())
@@ -72,6 +79,8 @@ class TerminalPackaging(unittest.TestCase):
             (root / 'docs').mkdir()
             (root / 'docs/TERMINAL.md').write_text('terminal instructions')
             native.mkdir()
+            (root / 'native/vendor/minimp3').mkdir(parents=True)
+            (root / 'native/vendor/minimp3/LICENSE').write_text('minimp3 CC0')
             gui = bundle / 'Contents/MacOS/THMR'
             gui.parent.mkdir(parents=True)
             gui.write_bytes(b'Flutter GUI executable')

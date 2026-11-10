@@ -15,10 +15,17 @@ flowchart TB
             ipc["本机控制接口<br/>认证 HTTP / WebSocket"]
             session["播放状态机<br/>Radio 元数据轮询"]
             mpv["libmpv<br/>唯一桌面音频引擎"]
+            audio["单连接 MP3 解码<br/>有界 PCM 缓存"]
+            features["提前分析<br/>按样本位置保存指标"]
             native["系统媒体控制<br/>SMTC / MPRIS / MediaPlayer"]
             settings[("settings.toml<br/>来源 / 码率 / 音量")]
             ipc <-->|"命令 / 确认快照"| session
             session -->|"控制播放"| mpv
+            session -->|"启动 / 取消音频代次"| audio
+            audio -->|"同一份 PCM"| mpv
+            audio -->|"同一份 PCM"| features
+            mpv -->|"实际播放位置"| features
+            features -->|"已到期的指标"| ipc
             session <-->|"媒体命令 / 状态"| native
             session <-->|"读写偏好"| settings
         end
@@ -44,7 +51,7 @@ flowchart TB
     end
 
     session <-->|"状态轮询"| radio
-    radio -->|"直播音频"| mpv
+    radio -->|"一条直播连接"| audio
     local <-->|"状态轮询"| radio
     radio -->|"直播音频"| engine
     gui <-->|"封面 / 反馈"| radio
@@ -57,8 +64,8 @@ flowchart TB
 
 | 目录 | 职责 |
 | --- | --- |
-| `crates/thmr-core` | 协议、配置、运行目录和宿主发现 |
-| `crates/thmr-daemon` | libmpv 播放、直播状态机、Radio 轮询、HTTP/WebSocket 与原生媒体控制 |
+| `crates/thmr-core` | 协议、PCM 指标分析与频谱映射、配置、运行目录和宿主发现 |
+| `crates/thmr-daemon` | 单连接 MP3 解码、共享 PCM 与指标队列、libmpv 播放、直播状态机、Radio 轮询、HTTP/WebSocket 与原生媒体控制 |
 | `crates/thmr-cli` | CLI、TUI 和 GUI 启动 |
 | `lib/core/player` | Flutter 桌面会话适配、应用内播放器和频谱 |
 | `lib/core/api`、`models`、`state` | 后端接口、数据模型和 Riverpod 状态 |
@@ -70,9 +77,15 @@ flowchart TB
 
 桌面来源、码率和音量以宿主确认状态为准。主题、窗口和账号等界面设置由 Flutter 保存。共享宿主模式不创建第二个播放器、远端音频连接或系统媒体会话。暂停时切换来源/码率保持暂停；直播恢复时连接当前广播位置。
 
+TUI 的频谱、电平和弹幕指标由宿主提前计算，再按 `audio-pts` 选择已到期的数据，经 `/v1/audio` 推送。新旧音频代次的样本位置不能混用。宿主保留最多约 3 秒的待播放指标，消费后回收；TUI 静态档关闭本地指标订阅，宿主仍负责共享 PCM 的播放与有界提前分析。GUI 现有平台频谱来源保持各平台实现。
+
+共享音频回归可执行 `cargo test --workspace --bins --lib` 和 `python tool/test_shared_audio_host.py`；后者使用本地 MP3 夹具、真实宿主和 libmpv 的计时空输出，验证暂停停止下载、恢复、来源/码率切换、采样格式变化与断流重连。Windows 真实音频对齐测量见 `tool/measure_host_audio.py` 与对应测量报告；它需要额外的本地 Python 音频采集依赖，不属于应用运行依赖。
+
 ## 环境与源码运行
 
 Flutter 版本与 `.github/workflows/build.yml` 保持一致，Rust 由 `rust-toolchain.toml` 固定。更新工具需要 Node.js 22+，辅助脚本使用 Python 3。Windows 需要 Visual Studio 桌面 C++ 工作负载；Linux 依赖见 [Linux 文档](LINUX.md)，macOS 需要 Xcode 与 CocoaPods。各平台客户端在对应系统构建。
+
+Rust 播放宿主使用 `cc` 构建项目内置 minimp3，需要目标平台的 C++ 编译器（Windows MSVC、Linux g++/clang++、macOS Apple Clang）；解码器静态链接进宿主，不依赖 Flutter 或外部频谱程序。TUI 可视化只订阅本地指标，详见[终端说明](TERMINAL.md)。
 
 ```sh
 flutter pub get

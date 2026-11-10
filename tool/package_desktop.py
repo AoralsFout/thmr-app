@@ -89,6 +89,14 @@ def stage(system, bundle, native, terminal_only=False):
         if system == 'windows':
             shutil.copy2(bundle / 'libmpv-2.dll', binaries / 'libmpv-2.dll')
     shutil.copy2(ROOT / 'docs/TERMINAL.md', output / 'README.md')
+    # The host statically embeds the vendored MP3 decoder on every platform.
+    license_source = ROOT / 'native/vendor/minimp3/LICENSE'
+    license_destinations = [output / 'licenses/minimp3']
+    if not terminal_only:
+        license_destinations.append(info_dir / 'licenses/minimp3')
+    for directory in license_destinations:
+        directory.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(license_source, directory / 'LICENSE')
     (output / 'native-version.json').write_text(json.dumps(metadata), encoding='utf-8')
     # Include the dependency notices shipped with the pinned GUI build where present.
     for source in [bundle / 'data/flutter_assets/NOTICES.Z', bundle / 'Contents/Frameworks/App.framework/Resources/flutter_assets/NOTICES.Z']:
